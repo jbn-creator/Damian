@@ -141,7 +141,7 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
       <section
         ref={ref}
         aria-label="Damian's canvas"
-        className="relative flex min-h-0 flex-col overflow-hidden border-hairline bg-void opacity-0 lg:w-[60%] lg:border-r"
+        className="relative flex min-h-0 shrink-0 flex-col overflow-hidden border-hairline bg-void opacity-0 max-lg:h-[46%] lg:w-[60%] lg:shrink lg:border-r"
       >
         <BrowserChrome url={url} viewport={viewport} onViewportChange={setViewport} />
 
