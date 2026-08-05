@@ -50,6 +50,12 @@ const config: Config = {
       display: ['var(--font-display)', 'sans-serif'],
       body: ['var(--font-body)', 'sans-serif'],
       /*
+       * Tailwind preflight resolves the root font from fontFamily.sans and
+       * falls back to its own bundled system stack when the key is absent.
+       * Pointing it at the body face keeps that stack out of the build.
+       */
+      sans: ['var(--font-body)', 'sans-serif'],
+      /*
        * The generic monospace keyword, deliberately, for the one collapsed code
        * sketch in the interface. Declaring it here also stops Tailwind preflight
        * from falling back to its own bundled system font stack for pre and code.
