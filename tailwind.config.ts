@@ -49,6 +49,12 @@ const config: Config = {
     fontFamily: {
       display: ['var(--font-display)', 'sans-serif'],
       body: ['var(--font-body)', 'sans-serif'],
+      /*
+       * The generic monospace keyword, deliberately, for the one collapsed code
+       * sketch in the interface. Declaring it here also stops Tailwind preflight
+       * from falling back to its own bundled system font stack for pre and code.
+       */
+      mono: ['monospace'],
     },
     extend: {
       fontSize: {
