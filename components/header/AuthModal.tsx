@@ -33,6 +33,7 @@ export function AuthModal({
   onClose,
 }: AuthModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const usernameRef = useRef<HTMLInputElement>(null);
   const usernameId = useId();
   const passwordId = useId();
   const reduced = usePrefersReducedMotion();
@@ -40,11 +41,22 @@ export function AuthModal({
   const [username, setUsername] = useState(credentials?.username ?? '');
   const [password, setPassword] = useState(credentials?.password ?? '');
 
-  /* Open the dialog. Closing is deferred until the exit animation resolves. */
+  /*
+   * Open the dialog. Closing is deferred until the exit animation resolves.
+   *
+   * showModal moves focus to the first focusable element, which is the close
+   * button. Damian is asking for a username, so focus is moved to that field
+   * on the frame after the dialog enters the top layer.
+   */
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (!dialog || !open) return;
+    if (!dialog.open) dialog.showModal();
+
+    const frame = requestAnimationFrame(() => {
+      usernameRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [open]);
 
   /* Rehydrate the fields from session state each time Damian is asked again. */
@@ -151,7 +163,7 @@ export function AuthModal({
                     />
                     <input
                       id={usernameId}
-                      autoFocus
+                      ref={usernameRef}
                       type="text"
                       autoComplete="off"
                       spellCheck={false}

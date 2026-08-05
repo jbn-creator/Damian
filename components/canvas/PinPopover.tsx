@@ -177,7 +177,7 @@ export function PinPopover({
 
               <h3
                 id={titleId}
-                className="mt-3 font-display text-base font-bold leading-snug tracking-cut text-chalk"
+                className="mt-3 text-pretty font-display text-base font-bold leading-snug tracking-cut text-chalk"
               >
                 {pin.title}
               </h3>
@@ -193,7 +193,7 @@ export function PinPopover({
             </button>
           </div>
 
-          <p className="mt-3 text-tiny leading-[1.65] text-silver">{pin.description}</p>
+          <p className="mt-3 text-pretty text-tiny leading-[1.65] text-silver">{pin.description}</p>
 
           {/* Impact score */}
           <div className="mt-4 rounded-2xl border border-hairline bg-void p-3.5">
@@ -224,7 +224,7 @@ export function PinPopover({
             <p className="text-micro font-semibold uppercase text-silver">
               Damian proposes
             </p>
-            <p className="mt-2 text-tiny leading-[1.65] text-chalk">{pin.suggestedFix}</p>
+            <p className="mt-2 text-pretty text-tiny leading-[1.65] text-chalk">{pin.suggestedFix}</p>
           </div>
 
           <button

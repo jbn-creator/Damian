@@ -64,7 +64,12 @@ function SignupFields() {
   );
 }
 
-/** The dashboard chart. Deliberately the best composed region on the page. */
+/**
+ * The dashboard chart. Deliberately the best composed region on the page.
+ *
+ * Bars take the xl radius, not the full one. At this scale a bar is roughly as
+ * wide as it is tall, and a full radius turns the short columns into circles.
+ */
 function ChartBars() {
   const heights = [4.2, 6.8, 5.1, 8.4, 7.2, 9.6, 6.4, 10.8, 8.2, 11.4];
   return (
@@ -72,11 +77,12 @@ function ChartBars() {
       {heights.map((height, index) => (
         <Block
           key={`bar-${index}`}
-          x={8 + index * 8.4}
+          x={8.4 + index * 8.4}
           y={95 - height}
-          w={5.2}
+          w={3.6}
           h={height}
           tone={index === heights.length - 1 ? 'accent' : 'mid'}
+          round="xl"
         />
       ))}
     </>

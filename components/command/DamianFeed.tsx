@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowDown, Terminal } from 'lucide-react';
@@ -43,6 +43,29 @@ function TypeMarker({ type }: { type: DamianLog['type'] }) {
 }
 
 /**
+ * Split a message for the character reveal.
+ *
+ * Characters are wrapped per word, and the spaces between words are left as
+ * bare text nodes. Wrapping a space inside its own inline element removes the
+ * soft wrap opportunity, which makes a long line overflow instead of breaking.
+ * This keeps the reveal per character and the line break behaviour intact.
+ */
+function splitForReveal(log: DamianLog) {
+  return log.message.split(' ').map((word, wordIndex) => (
+    <Fragment key={`${log.id}-word-${wordIndex}`}>
+      {wordIndex > 0 ? ' ' : null}
+      <span>
+        {Array.from(word).map((character, characterIndex) => (
+          <span key={`${log.id}-char-${wordIndex}-${characterIndex}`} data-char>
+            {character}
+          </span>
+        ))}
+      </span>
+    </Fragment>
+  ));
+}
+
+/**
  * Tab 1. Damian thinking out loud.
  *
  * GSAP owns this surface end to end: the line stagger and the character reveal.
@@ -55,8 +78,24 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const lines = useRef(new Map<string, HTMLLIElement>());
   const revealed = useRef(new Set<string>());
+  const timelines = useRef<gsap.core.Timeline[]>([]);
   const [pinnedToLatest, setPinnedToLatest] = useState(true);
+  /* Read inside the reveal effect, so a scroll does not restart it. */
+  const pinnedRef = useRef(true);
   const reduced = usePrefersReducedMotion();
+
+  /*
+   * Timelines are killed on unmount only. Killing them from the effect cleanup
+   * would abort the previous line's character reveal the moment the next log
+   * arrives, leaving earlier messages permanently half faded.
+   */
+  useEffect(
+    () => () => {
+      timelines.current.forEach((timeline) => timeline.kill());
+      timelines.current = [];
+    },
+    [],
+  );
 
   const jumpToLatest = useCallback(() => {
     const node = scroller.current;
@@ -65,12 +104,15 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
       top: node.scrollHeight,
       behavior: reduced ? 'auto' : 'smooth',
     });
+    pinnedRef.current = true;
     setPinnedToLatest(true);
   }, [reduced]);
 
   useEffect(() => {
     if (logs.length === 0) {
       revealed.current.clear();
+      timelines.current.forEach((timeline) => timeline.kill());
+      timelines.current = [];
       return;
     }
 
@@ -79,6 +121,8 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
     fresh.forEach((log) => revealed.current.add(log.id));
 
     const timeline = gsap.timeline();
+    timelines.current = timelines.current.filter((existing) => existing.isActive());
+    timelines.current.push(timeline);
 
     fresh.forEach((log) => {
       const line = lines.current.get(log.id);
@@ -106,7 +150,7 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
         );
     });
 
-    if (pinnedToLatest) {
+    if (pinnedRef.current) {
       const node = scroller.current;
       if (node) {
         node.scrollTo({
@@ -115,11 +159,7 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
         });
       }
     }
-
-    return () => {
-      timeline.kill();
-    };
-  }, [logs, reduced, pinnedToLatest]);
+  }, [logs, reduced]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -140,7 +180,9 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
           onScroll={(event) => {
             const node = event.currentTarget;
             const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-            setPinnedToLatest(distance < 56);
+            const pinned = distance < 56;
+            pinnedRef.current = pinned;
+            setPinnedToLatest(pinned);
           }}
           className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6"
         >
@@ -175,15 +217,11 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
 
                   <TypeMarker type={log.type} />
 
-                  <p className={`min-w-0 flex-1 text-[0.8125rem] leading-6 ${MESSAGE_TONE[log.type]}`}>
+                  <p
+                    className={`min-w-0 flex-1 text-pretty text-[0.8125rem] leading-6 ${MESSAGE_TONE[log.type]}`}
+                  >
                     <span className="sr-only">{`${TYPE_NAME[log.type]}. ${log.message}`}</span>
-                    <span aria-hidden="true">
-                      {log.message.split('').map((character, index) => (
-                        <span key={`${log.id}-${index}`} data-char>
-                          {character === ' ' ? ' ' : character}
-                        </span>
-                      ))}
-                    </span>
+                    <span aria-hidden="true">{splitForReveal(log)}</span>
                   </p>
                 </li>
               ))}

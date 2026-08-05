@@ -87,7 +87,7 @@ export function RadialMetric({ metric }: { metric: ScorecardMetric }) {
         {metric.label}
       </h4>
       <span className="sr-only">{`Score ${metric.score} out of 100.`}</span>
-      <p className="mt-2 text-micro font-medium normal-case leading-4 tracking-normal text-silver">
+      <p className="mt-2 text-pretty text-micro font-medium normal-case leading-4 tracking-normal text-silver">
         {metric.verdict}
       </p>
     </li>

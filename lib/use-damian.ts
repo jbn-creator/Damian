@@ -52,6 +52,13 @@ export interface DamianRun {
 
 const PIN_BY_ID = new Map(AUDIT_PINS.map((pin) => [pin.id, pin]));
 
+/*
+ * Stable empty arrays. A fresh literal on every render would change identity
+ * and restart the effects downstream that key off these lists.
+ */
+const NO_IDEAS: ProductIdea[] = [];
+const NO_METRICS: ScorecardMetric[] = [];
+
 /**
  * The state machine behind the simulated run.
  *
@@ -163,8 +170,8 @@ export function useDamian(): DamianRun {
   const isRunning =
     state === 'launching' || state === 'scanning' || state === 'analyzing';
 
-  const ideas: ProductIdea[] = hasCompleted ? PRODUCT_IDEAS : [];
-  const metrics: ScorecardMetric[] = hasCompleted ? SCORECARD_METRICS : [];
+  const ideas: ProductIdea[] = hasCompleted ? PRODUCT_IDEAS : NO_IDEAS;
+  const metrics: ScorecardMetric[] = hasCompleted ? SCORECARD_METRICS : NO_METRICS;
 
   return {
     url,

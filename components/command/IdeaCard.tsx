@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Clock, GitPullRequestArrow } from 'lucide-react';
+import { ChevronDown, Clock, GitPullRequestArrow } from 'lucide-react';
 import { CATEGORY_LABEL } from '@/lib/mock-data';
 import { copyToClipboard } from '@/lib/clipboard';
 import { usePrefersReducedMotion } from '@/lib/use-media-query';
@@ -108,25 +108,35 @@ export function IdeaCard({ idea, targetUrl }: IdeaCardProps) {
         </span>
       </div>
 
-      <h4 className="mt-3.5 font-display text-[1.0625rem] font-bold leading-snug tracking-cut text-chalk">
+      <h4 className="mt-3.5 text-pretty font-display text-[1.0625rem] font-bold leading-snug tracking-cut text-chalk">
         {idea.title}
       </h4>
 
       <div className="mt-3 flex flex-col gap-3">
         <div>
           <p className="text-micro font-semibold uppercase text-silver">Problem</p>
-          <p className="mt-1.5 text-tiny leading-[1.65] text-silver">{idea.description}</p>
+          <p className="mt-1.5 text-pretty text-tiny leading-[1.65] text-silver">{idea.description}</p>
         </div>
 
         <div>
           <p className="text-micro font-semibold uppercase text-silver">Damian proposes</p>
-          <p className="mt-1.5 text-tiny leading-[1.65] text-chalk">{idea.solution}</p>
+          <p className="mt-1.5 text-pretty text-tiny leading-[1.65] text-chalk">{idea.solution}</p>
         </div>
       </div>
 
       {idea.codeSnippet ? (
-        <details className="mt-3.5 rounded-2xl border border-hairline bg-void">
-          <summary className="cursor-pointer rounded-2xl px-3.5 py-2.5 text-micro font-semibold uppercase text-silver transition-colors duration-200 ease-instrument hover:text-chalk">
+        <details className="group/sketch mt-3.5 rounded-2xl border border-hairline bg-void">
+          {/*
+            The native disclosure triangle is replaced with a chevron that
+            rotates from the open state. Still a real summary element, so the
+            keyboard and screen reader behaviour comes from the platform.
+          */}
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-2xl px-3.5 py-2.5 text-micro font-semibold uppercase text-silver transition-colors duration-200 ease-instrument hover:text-chalk [&::-webkit-details-marker]:hidden">
+            <ChevronDown
+              aria-hidden="true"
+              className="h-3 w-3 transition-transform duration-300 ease-instrument group-open/sketch:rotate-180"
+              strokeWidth={2.4}
+            />
             Implementation sketch
           </summary>
           <pre className="overflow-x-auto border-t border-hairline px-3.5 py-3 font-mono text-[0.6875rem] leading-5 text-silver">

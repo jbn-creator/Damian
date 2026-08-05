@@ -35,12 +35,28 @@ export function PinOverlay({
 }: PinOverlayProps) {
   const anchors = useRef(new Map<string, HTMLLIElement>());
   const dropped = useRef(new Set<string>());
+  const tweens = useRef<gsap.core.Tween[]>([]);
   const reduced = usePrefersReducedMotion();
+
+  /*
+   * Tweens are killed on unmount only. Killing them from the effect cleanup
+   * would abort the drop of the previous pin the moment the next one arrives,
+   * freezing it part way through its landing.
+   */
+  useEffect(
+    () => () => {
+      tweens.current.forEach((tween) => tween.kill());
+      tweens.current = [];
+    },
+    [],
+  );
 
   useEffect(() => {
     /* A relaunch clears the board, so the next run animates from scratch. */
     if (pins.length === 0) {
       dropped.current.clear();
+      tweens.current.forEach((tween) => tween.kill());
+      tweens.current = [];
       return;
     }
 
@@ -60,22 +76,21 @@ export function PinOverlay({
     }
 
     /* Damian places a pin. The small overshoot is the landing, and it earns it. */
-    const tween = gsap.fromTo(
-      targets,
-      { opacity: 0, scale: 0.2, y: -22 },
-      {
-        opacity: 1,
-        scale: 1,
-        y: 0,
-        duration: 0.52,
-        ease: 'back.out(1.8)',
-        stagger: 0.14,
-      },
+    tweens.current = tweens.current.filter((tween) => tween.isActive());
+    tweens.current.push(
+      gsap.fromTo(
+        targets,
+        { opacity: 0, scale: 0.2, y: -22 },
+        {
+          opacity: 1,
+          scale: 1,
+          y: 0,
+          duration: 0.52,
+          ease: 'back.out(1.8)',
+          stagger: 0.14,
+        },
+      ),
     );
-
-    return () => {
-      tween.kill();
-    };
   }, [pins, reduced]);
 
   return (
@@ -112,7 +127,15 @@ export function PinOverlay({
                 index={index}
                 isOpen={openPinId === pin.id}
                 popoverId={popoverIdFor(pin.id)}
-                onToggle={() => onTogglePin(pin.id)}
+                onToggle={(event) => {
+                  /*
+                    The canvas closes the popover on any click that lands on it.
+                    Without this, opening a pin and closing it happen in the
+                    same event and the popover never appears.
+                  */
+                  event.stopPropagation();
+                  onTogglePin(pin.id);
+                }}
               />
             </span>
           </span>

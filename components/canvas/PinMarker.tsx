@@ -9,7 +9,7 @@ interface PinMarkerProps {
   index: number;
   isOpen: boolean;
   popoverId: string;
-  onToggle: () => void;
+  onToggle: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 const FILL: Record<AuditPin['type'], string> = {
@@ -19,9 +19,9 @@ const FILL: Record<AuditPin['type'], string> = {
 };
 
 const RING: Record<AuditPin['type'], string> = {
-  friction: 'bg-crimson/45',
-  warning: 'bg-amber/45',
-  opportunity: 'bg-emerald/45',
+  friction: 'border-crimson/60',
+  warning: 'border-amber/60',
+  opportunity: 'border-emerald/60',
 };
 
 /**
@@ -46,15 +46,24 @@ export const PinMarker = forwardRef<HTMLButtonElement, PinMarkerProps>(
           isOpen ? 'ring-2 ring-chalk ring-offset-2 ring-offset-void' : ''
         }`}
       >
-        {/* Decorative pulse. CSS only, and the reduced motion layer stops it. */}
+        {/*
+          Decorative pulse. A ring rather than a filled disc, so an expanding
+          pin never washes out the region it is pointing at. CSS only, and the
+          reduced motion layer stops it.
+        */}
         <span
           aria-hidden="true"
-          className={`absolute inset-0 rounded-full ${RING[pin.type]} animate-pulse-ring`}
+          className={`absolute inset-0 rounded-full border-2 ${RING[pin.type]} animate-pulse-ring`}
         />
+        {/*
+          The numeral is set in the body face, not the display face. Syne's
+          digits are the right choice at 28px on the scorecard and illegible at
+          11px inside a badge, so this is where the display font stops.
+        */}
         <span
           aria-hidden="true"
           data-numeric
-          className="relative font-display text-[0.6875rem] font-extrabold leading-none text-void"
+          className="relative font-body text-[0.75rem] font-bold leading-none text-void"
         >
           {index + 1}
         </span>

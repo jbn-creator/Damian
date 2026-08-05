@@ -129,7 +129,7 @@ export function Scorecard({ metrics }: ScorecardProps) {
         ))}
       </ul>
 
-      <p className="mt-5 rounded-2xl border border-hairline bg-obsidian px-4 py-3.5 text-tiny leading-[1.65] text-silver">
+      <p className="mt-5 rounded-2xl border border-hairline bg-obsidian px-4 py-3.5 text-pretty text-tiny leading-[1.65] text-silver">
         <span className="font-semibold text-chalk">Damian&apos;s read: </span>
         The product is well composed and badly introduced. Fix the signup ask and
         the headline and the other two numbers move on their own.

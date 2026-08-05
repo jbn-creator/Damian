@@ -65,16 +65,16 @@ export function OpportunityCanvas({ ideas, targetUrl }: OpportunityCanvasProps) 
                 >
                   {group.heading}
                 </h3>
-                <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
                 <span
                   data-numeric
-                  className="shrink-0 text-micro font-semibold uppercase text-silver"
+                  className="shrink-0 rounded-full border border-hairline px-2 py-0.5 text-micro font-bold text-silver"
                 >
                   {grouped.length}
                 </span>
+                <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
               </div>
 
-              <p className="mt-2 text-tiny leading-5 text-silver">{group.note}</p>
+              <p className="mt-2 text-pretty text-tiny leading-5 text-silver">{group.note}</p>
 
               <div className="mt-4 flex flex-col gap-3">
                 {grouped.map((idea) => (
