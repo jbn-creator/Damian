@@ -235,7 +235,7 @@ export function AuthModal({
 
                   <button
                     type="submit"
-                    className="rounded-full bg-cobalt px-6 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument hover:scale-[1.02] active:scale-[0.99]"
+                    className="relative overflow-hidden rounded-full bg-cobalt px-6 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument hover:scale-[1.02] active:scale-[0.99] before:absolute before:inset-0 before:bg-void/15 before:content-['']"
                   >
                     Hand to Damian
                   </button>

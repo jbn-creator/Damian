@@ -98,7 +98,7 @@ export function PinPopover({
     <button
       type="button"
       onClick={() => onGenerateFix(pin)}
-      className={`flex w-full items-center justify-center gap-2 rounded-full bg-cobalt px-5 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument hover:scale-[1.02] active:scale-[0.99] ${
+      className={`relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-cobalt px-5 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument before:absolute before:inset-0 before:bg-void/15 before:content-[''] hover:scale-[1.02] active:scale-[0.99] ${
         compact ? '' : 'mt-5'
       }`}
     >

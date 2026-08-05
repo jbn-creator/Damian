@@ -88,8 +88,14 @@ export function TabBar({ active, onChange, counts }: TabBarProps) {
                 <span
                   data-numeric
                   className={`rounded-full border px-1.5 py-0.5 text-micro font-bold ${
+                    /*
+                      Cobalt text on the cobalt tint measures 4.12 to 1, short
+                      of AA at this size. Chalk on the same tint reads 15.23 to
+                      1 and the accent still carries the state through the
+                      border and the sliding indicator below.
+                    */
                     isActive
-                      ? 'border-cobalt/40 bg-cobalt/10 text-cobalt'
+                      ? 'border-cobalt/40 bg-cobalt/10 text-chalk'
                       : 'border-hairline text-silver'
                   }`}
                 >
