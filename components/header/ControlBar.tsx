@@ -78,12 +78,16 @@ export const ControlBar = forwardRef<HTMLElement, ControlBarProps>(
             </div>
 
             {/*
-              Both visible activity readouts are hidden from assistive tech.
-              A single live region below announces the state change once.
+              Both visible activity readouts are hidden from assistive tech, and
+              a single live region below announces the state change once. While
+              Damian is running, the launch control already carries the activity,
+              so these stand down rather than printing it twice.
             */}
-            <p aria-hidden="true" className="text-tiny font-medium text-silver lg:hidden">
-              {activity}
-            </p>
+            {isRunning ? null : (
+              <p aria-hidden="true" className="text-tiny font-medium text-silver lg:hidden">
+                {activity}
+              </p>
+            )}
           </div>
 
           {/* Target and launch */}
@@ -188,12 +192,14 @@ export const ControlBar = forwardRef<HTMLElement, ControlBarProps>(
             </div>
           </form>
 
-          <p
-            aria-hidden="true"
-            className="hidden shrink-0 text-tiny font-medium text-silver lg:block"
-          >
-            {activity}
-          </p>
+          {isRunning ? null : (
+            <p
+              aria-hidden="true"
+              className="hidden shrink-0 text-tiny font-medium text-silver lg:block"
+            >
+              {activity}
+            </p>
+          )}
 
           <p role="status" aria-live="polite" className="sr-only">
             {`Damian status: ${activity}.`}
