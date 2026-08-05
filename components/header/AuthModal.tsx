@@ -34,6 +34,8 @@ export function AuthModal({
 }: AuthModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const usernameRef = useRef<HTMLInputElement>(null);
+  /* The control that opened the dialog, so focus can be handed back to it. */
+  const opener = useRef<HTMLElement | null>(null);
   const usernameId = useId();
   const passwordId = useId();
   const reduced = usePrefersReducedMotion();
@@ -51,7 +53,12 @@ export function AuthModal({
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || !open) return;
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      const focused = document.activeElement;
+      opener.current =
+        focused instanceof HTMLElement && focused !== document.body ? focused : null;
+      dialog.showModal();
+    }
 
     const frame = requestAnimationFrame(() => {
       usernameRef.current?.focus({ preventScroll: true });
@@ -80,9 +87,16 @@ export function AuthModal({
     return () => dialog.removeEventListener('cancel', onCancel);
   }, [onClose]);
 
+  /*
+   * Closing is deferred until the exit animation resolves, which means the
+   * platform's own focus restoration no longer has a target to return to. The
+   * opener is handed focus explicitly instead.
+   */
   const handleExitComplete = () => {
     const dialog = dialogRef.current;
     if (dialog?.open) dialog.close();
+    opener.current?.focus({ preventScroll: true });
+    opener.current = null;
   };
 
   const handleSubmit = (event: React.FormEvent) => {
