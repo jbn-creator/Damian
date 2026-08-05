@@ -47,7 +47,7 @@ export const CommandCenter = forwardRef<HTMLElement, CommandCenterProps>(
       <aside
         ref={ref}
         aria-label="Damian's command center"
-        className="relative flex min-h-0 shrink-0 flex-col bg-void opacity-0 max-lg:h-[54%] max-lg:rounded-t-3xl max-lg:border-t max-lg:border-hairline max-lg:shadow-panel lg:w-[40%] lg:shrink"
+        className="relative flex min-h-0 shrink-0 flex-col bg-void opacity-0 max-lg:h-[46%] max-lg:rounded-t-3xl max-lg:border-t max-lg:border-hairline max-lg:shadow-panel lg:w-[40%] lg:shrink"
       >
         <h2 className="sr-only">Damian&apos;s command center</h2>
 

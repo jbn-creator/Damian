@@ -137,117 +137,133 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
       });
     };
 
+    /*
+     * One popover instance, mounted in one of two parents. Floating anchors to
+     * the capture frame so it can flip beside its pin. Compact anchors to the
+     * canvas panel so the sheet is bounded by the space actually available.
+     */
+    const popoverNode =
+      openPin && placement ? (
+        <PinPopover
+          key={openPin.id}
+          pin={openPin}
+          index={openPinIndex}
+          placement={placement}
+          popoverId={`popover-${openPin.id}`}
+          onClose={closePopover}
+          onGenerateFix={handleGenerateFix}
+        />
+      ) : null;
+
     return (
       <section
         ref={ref}
         aria-label="Damian's canvas"
-        className="relative flex min-h-0 shrink-0 flex-col overflow-hidden border-hairline bg-void opacity-0 max-lg:h-[46%] lg:w-[60%] lg:shrink lg:border-r"
+        className="relative flex min-h-0 shrink-0 flex-col overflow-hidden border-hairline bg-void opacity-0 max-lg:h-[54%] lg:w-[60%] lg:shrink lg:border-r"
       >
         <BrowserChrome url={url} viewport={viewport} onViewportChange={setViewport} />
 
-        {/* The stage. Independent scroll region. */}
-        <div
-          className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto instrument-grid p-4 sm:p-6 lg:p-8"
-          onClick={closePopover}
-        >
+        {/*
+          Stage bounds. This wrapper is the positioning context for the compact
+          sheet, so the sheet is bounded by the visible stage rather than by the
+          scrollable content inside it.
+        */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          {/* The stage. Independent scroll region. */}
           <div
-            className="relative w-full transition-[width] duration-500 ease-instrument"
-            style={{ width: frameWidth, maxWidth: '100%' }}
+            className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto instrument-grid p-4 sm:p-6 lg:p-8"
+            onClick={closePopover}
           >
-            {/* Frame. Positioning context for both the clip and the popover. */}
-            <div className="relative">
-              <div className="relative overflow-hidden rounded-2xl border border-hairline bg-void shadow-panel">
-                {/* Zoom wrapper. Transform written here and nowhere else. */}
-                <div
-                  className="relative origin-center transition-transform duration-500 ease-instrument"
-                  style={{ transform: `scale(${zoom})` }}
-                >
-                  <CapturedSurface />
-                  <PinOverlay
-                    pins={pins}
-                    zoom={zoom}
-                    visible={pinsVisible}
-                    openPinId={openPinId}
-                    onTogglePin={(pinId) =>
-                      setOpenPinId((current) => (current === pinId ? null : pinId))
-                    }
-                    popoverIdFor={(pinId) => `popover-${pinId}`}
-                    registerMarker={registerMarker}
-                  />
+            <div
+              className="relative w-full transition-[width] duration-500 ease-instrument"
+              style={{ width: frameWidth, maxWidth: '100%' }}
+            >
+              {/* Frame. Positioning context for both the clip and the popover. */}
+              <div className="relative">
+                <div className="relative overflow-hidden rounded-2xl border border-hairline bg-void shadow-panel">
+                  {/* Zoom wrapper. Transform written here and nowhere else. */}
+                  <div
+                    className="relative origin-center transition-transform duration-500 ease-instrument"
+                    style={{ transform: `scale(${zoom})` }}
+                  >
+                    <CapturedSurface />
+                    <PinOverlay
+                      pins={pins}
+                      zoom={zoom}
+                      visible={pinsVisible}
+                      openPinId={openPinId}
+                      onTogglePin={(pinId) =>
+                        setOpenPinId((current) => (current === pinId ? null : pinId))
+                      }
+                      popoverIdFor={(pinId) => `popover-${pinId}`}
+                      registerMarker={registerMarker}
+                    />
+                  </div>
+
+                  {/* Session state overlays. */}
+                  <AnimatePresence>
+                    {state === 'idle' ? (
+                      <motion.div
+                        key="idle"
+                        initial={reduced ? false : { opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={reduced ? { duration: 0 } : { duration: 0.4 }}
+                        className="absolute inset-0 grid place-items-center bg-void/80 px-6 backdrop-blur-[3px]"
+                      >
+                        <div className="max-w-sm text-center">
+                          <span className="mx-auto grid h-11 w-11 place-items-center rounded-full border border-hairline bg-obsidian">
+                            <Radar
+                              aria-hidden="true"
+                              className="h-4 w-4 text-silver"
+                              strokeWidth={2}
+                            />
+                          </span>
+                          <p className="mt-4 font-display text-lg font-bold leading-tight tracking-cut text-chalk">
+                            No session open.
+                          </p>
+                          <p className="mt-2 text-tiny leading-5 text-silver">
+                            Give Damian a URL and he will open the page, read it,
+                            and pin what he finds.
+                          </p>
+                        </div>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+
+                  {/* Scan sweep. CSS keyframes, stopped by the reduced motion layer. */}
+                  {isRunning ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 top-0 h-24 animate-scan-sweep bg-cobalt/10"
+                      style={{
+                        maskImage: 'linear-gradient(to bottom, transparent, #08090C)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, transparent, #08090C)',
+                      }}
+                    />
+                  ) : null}
                 </div>
 
-                {/* Session state overlays. */}
-                <AnimatePresence>
-                  {state === 'idle' ? (
-                    <motion.div
-                      key="idle"
-                      initial={reduced ? false : { opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={reduced ? { duration: 0 } : { duration: 0.4 }}
-                      className="absolute inset-0 grid place-items-center bg-void/80 px-6 backdrop-blur-[3px]"
-                    >
-                      <div className="max-w-sm text-center">
-                        <span className="mx-auto grid h-11 w-11 place-items-center rounded-full border border-hairline bg-obsidian">
-                          <Radar
-                            aria-hidden="true"
-                            className="h-4 w-4 text-silver"
-                            strokeWidth={2}
-                          />
-                        </span>
-                        <p className="mt-4 font-display text-lg font-bold leading-tight tracking-cut text-chalk">
-                          No session open.
-                        </p>
-                        <p className="mt-2 text-tiny leading-5 text-silver">
-                          Give Damian a URL and he will open the page, read it,
-                          and pin what he finds.
-                        </p>
-                      </div>
-                    </motion.div>
-                  ) : null}
-                </AnimatePresence>
-
-                {/* Scan sweep. CSS keyframes, stopped by the reduced motion layer. */}
-                {isRunning ? (
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-x-0 top-0 h-24 animate-scan-sweep bg-cobalt/10"
-                    style={{
-                      maskImage: 'linear-gradient(to bottom, transparent, #08090C)',
-                      WebkitMaskImage: 'linear-gradient(to bottom, transparent, #08090C)',
-                    }}
-                  />
-                ) : null}
+                {/* Popover layer. Outside the zoom wrapper, so type stays crisp. */}
+                <AnimatePresence>{isCompact ? null : popoverNode}</AnimatePresence>
               </div>
 
-              {/* Popover layer. Outside the zoom wrapper, so type stays crisp. */}
-              <AnimatePresence>
-                {openPin && placement ? (
-                  <PinPopover
-                    key={openPin.id}
-                    pin={openPin}
-                    index={openPinIndex}
-                    placement={placement}
-                    popoverId={`popover-${openPin.id}`}
-                    onClose={closePopover}
-                    onGenerateFix={handleGenerateFix}
-                  />
-                ) : null}
-              </AnimatePresence>
+              {/* Frame readout */}
+              <p className="mt-3 flex items-center justify-center gap-2 text-micro font-semibold uppercase text-silver">
+                <ScanLine aria-hidden="true" className="h-3 w-3" strokeWidth={2} />
+                <span data-numeric>
+                  {isRunning
+                    ? 'Live session. Damian is reading.'
+                    : pins.length > 0
+                      ? `${pins.length} pin${pins.length === 1 ? '' : 's'} placed on this capture`
+                      : 'Static capture. Awaiting instruction.'}
+                </span>
+              </p>
             </div>
-
-            {/* Frame readout */}
-            <p className="mt-3 flex items-center justify-center gap-2 text-micro font-semibold uppercase text-silver">
-              <ScanLine aria-hidden="true" className="h-3 w-3" strokeWidth={2} />
-              <span data-numeric>
-                {isRunning
-                  ? 'Live session. Damian is reading.'
-                  : pins.length > 0
-                    ? `${pins.length} pin${pins.length === 1 ? '' : 's'} placed on this capture`
-                    : 'Static capture. Awaiting instruction.'}
-              </span>
-            </p>
           </div>
+
+          {/* Compact sheet layer, bounded by the visible stage. */}
+          <AnimatePresence>{isCompact ? popoverNode : null}</AnimatePresence>
         </div>
 
         <CanvasControls

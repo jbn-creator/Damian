@@ -94,11 +94,29 @@ export function PinPopover({
         ].join(' '),
       };
 
+  const action = (
+    <button
+      type="button"
+      onClick={() => onGenerateFix(pin)}
+      className={`flex w-full items-center justify-center gap-2 rounded-full bg-cobalt px-5 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument hover:scale-[1.02] active:scale-[0.99] ${
+        compact ? '' : 'mt-5'
+      }`}
+    >
+      <Code2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2.2} />
+      Generate Fix Code
+    </button>
+  );
+
   return (
     <div
       className={
         compact
-          ? 'absolute inset-x-3 bottom-3 z-20'
+          ? /*
+              Compact anchors to the canvas panel, not to the capture frame, and
+              is bounded by it. The panel is shorter than this content on a
+              phone, so an unbounded sheet would be clipped at both ends.
+            */
+            'absolute inset-3 z-30 flex flex-col justify-end'
           : 'absolute z-20 w-[min(21rem,calc(100vw-4rem))]'
       }
       style={wrapperStyle}
@@ -129,10 +147,16 @@ export function PinPopover({
         transition={
           reduced ? { duration: 0 } : { duration: 0.28, ease: [0.16, 0.84, 0.24, 1] }
         }
-        className="overflow-hidden rounded-3xl border border-hairline bg-obsidian shadow-panel focus-visible:outline-none"
+        className={`overflow-hidden rounded-3xl border border-hairline bg-obsidian shadow-panel focus-visible:outline-none ${
+          compact ? 'flex max-h-full flex-col' : ''
+        }`}
       >
         {/* Zoomed crop of the exact region, centred on the pin coordinate. */}
-        <div className="relative aspect-[16/10] w-full overflow-hidden border-b border-hairline bg-void">
+        <div
+          className={`relative w-full shrink-0 overflow-hidden border-b border-hairline bg-void ${
+            compact ? 'aspect-[16/4]' : 'aspect-[16/10]'
+          }`}
+        >
           <div
             className="absolute inset-0"
             style={{
@@ -160,7 +184,9 @@ export function PinPopover({
           </span>
         </div>
 
-        <div className="p-4 sm:p-5">
+        <div
+          className={`p-4 sm:p-5 ${compact ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <span className="flex items-center gap-2">
@@ -227,15 +253,17 @@ export function PinPopover({
             <p className="mt-2 text-pretty text-tiny leading-[1.65] text-chalk">{pin.suggestedFix}</p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onGenerateFix(pin)}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-cobalt px-5 py-3 text-tiny font-bold text-chalk transition-transform duration-300 ease-instrument hover:scale-[1.02] active:scale-[0.99]"
-          >
-            <Code2 aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2.2} />
-            Generate Fix Code
-          </button>
+          {/* Floating keeps the action in flow. Compact pins it below. */}
+          {compact ? null : action}
         </div>
+
+        {/*
+          On compact the body scrolls and the action does not, so the one thing
+          Damian wants you to press is never below the fold of the sheet.
+        */}
+        {compact ? (
+          <div className="shrink-0 border-t border-hairline p-3">{action}</div>
+        ) : null}
       </motion.div>
     </div>
   );
