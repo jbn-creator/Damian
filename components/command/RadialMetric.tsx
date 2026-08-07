@@ -76,7 +76,7 @@ export function RadialMetric({ metric }: { metric: ScorecardMetric }) {
           <span
             data-radial-value
             data-numeric
-            className={`font-display text-[1.75rem] font-extrabold leading-none tracking-cut opacity-0 ${TEXT[band]}`}
+            className={`font-display text-[1.75rem] font-bold leading-none tracking-cut opacity-0 ${TEXT[band]}`}
           >
             {metric.score}
           </span>

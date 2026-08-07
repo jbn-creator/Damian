@@ -117,7 +117,7 @@ export function Scorecard({ metrics }: ScorecardProps) {
         </div>
         <p
           data-numeric
-          className={`shrink-0 font-display text-4xl font-extrabold leading-none tracking-cut ${COMPOSITE_TEXT[compositeBand]}`}
+          className={`shrink-0 font-display text-4xl font-bold leading-none tracking-cut ${COMPOSITE_TEXT[compositeBand]}`}
         >
           {composite}
         </p>

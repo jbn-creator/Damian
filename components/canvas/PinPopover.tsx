@@ -229,7 +229,7 @@ export function PinPopover({
               </span>
               <span
                 data-numeric
-                className={`font-display text-2xl font-extrabold leading-none tracking-cut ${ACCENT_TEXT[pin.type]}`}
+                className={`font-display text-2xl font-bold leading-none tracking-cut ${ACCENT_TEXT[pin.type]}`}
               >
                 {pin.impactScore}
                 <span className="ml-1 font-body text-tiny font-medium text-silver">

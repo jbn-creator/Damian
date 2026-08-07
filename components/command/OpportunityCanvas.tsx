@@ -61,7 +61,7 @@ export function OpportunityCanvas({ ideas, targetUrl }: OpportunityCanvasProps) 
               <div className="flex items-baseline gap-3">
                 <h3
                   id={`group-${group.category}`}
-                  className="font-display text-xl font-extrabold leading-none tracking-cut text-chalk"
+                  className="font-display text-xl font-bold leading-none tracking-cut text-chalk"
                 >
                   {group.heading}
                 </h3>

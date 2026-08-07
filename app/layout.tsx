@@ -1,15 +1,16 @@
 import type { Metadata, Viewport } from 'next';
-import { Syne, Plus_Jakarta_Sans } from 'next/font/google';
+import { Space_Grotesk, Plus_Jakarta_Sans } from 'next/font/google';
 import { ToastProvider } from '@/components/ui/Toast';
 import './globals.css';
 
 /**
- * Display face. Syne carries the editorial weight: heavy tops, unusual
- * proportions, so the brand mark reads as cut rather than set.
+ * Display face. Space Grotesk is the neutral geometric grotesque the direction
+ * calls for: wide circular bowls, a flat crossbar, and enough character at
+ * 9rem that a one word headline can carry a whole screen on its own.
  */
-const display = Syne({
+const display = Space_Grotesk({
   subsets: ['latin'],
-  weight: ['600', '700', '800'],
+  weight: ['500', '600', '700'],
   variable: '--font-display',
   display: 'swap',
 });
@@ -28,7 +29,7 @@ const body = Plus_Jakarta_Sans({
 export const metadata: Metadata = {
   title: 'Damian / Visual Product Intelligence Agent',
   description:
-    'Hand Damian a URL. He opens a live session, inspects the interface, pins the friction he finds, and assembles a board of product opportunities while you watch.',
+    'Describe the product in the browser, and let Damian handle the rest. He opens a live session, inspects the interface, pins the friction he finds, and assembles a board of product opportunities while you watch.',
   applicationName: 'Damian',
   authors: [{ name: 'Metics Media' }],
 };

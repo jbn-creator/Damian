@@ -68,7 +68,7 @@ export const ControlBar = forwardRef<HTMLElement, ControlBarProps>(
               </span>
 
               <span className="flex flex-col">
-                <span className="font-display text-[1.375rem] font-extrabold leading-none tracking-cut text-chalk">
+                <span className="font-display text-[1.375rem] font-bold leading-none tracking-cut text-chalk">
                   DAMIAN
                 </span>
                 <span className="mt-1.5 text-micro font-medium uppercase text-silver">
