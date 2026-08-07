@@ -33,9 +33,6 @@ export function SiteNav() {
               D
             </span>
           </span>
-          <span className="hidden font-display text-[0.9375rem] font-bold tracking-cut text-chalk sm:block">
-            Damian
-          </span>
         </Link>
 
         <ul className="flex items-center gap-1 sm:gap-2">

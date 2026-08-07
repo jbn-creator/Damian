@@ -49,14 +49,6 @@ export function Hero() {
 
   return (
     <div ref={root} className="mx-auto max-w-5xl px-5 text-center sm:px-8">
-      <p
-        data-hero
-        className="mx-auto mb-7 inline-flex items-center gap-2 rounded-full border border-hairline bg-obsidian px-3.5 py-1.5 text-micro font-semibold uppercase text-silver opacity-0"
-      >
-        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald" />
-        Visual Product Intelligence Agent
-      </p>
-
       <h1
         data-hero
         className="font-display text-[clamp(3.25rem,12vw,9rem)] font-bold leading-[0.92] tracking-cut text-chalk opacity-0"

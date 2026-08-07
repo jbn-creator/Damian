@@ -59,7 +59,7 @@ export function Workspace() {
 
     if (reduced) {
       gsap.set([canvas, aside, bar], { opacity: 1 });
-      gsap.set(shell, { clipPath: 'inset(0% 0% 0% 0%)' });
+      shell.style.clipPath = '';
       gsap.set(seam, { opacity: 0 });
       if (composer) gsap.set(composer, { opacity: 0 });
       setPhase('session');
@@ -70,13 +70,27 @@ export function Workspace() {
     const timeline = gsap.timeline({
       defaults: { ease: 'power3.out' },
       onComplete: () => {
-        gsap.set(shell, { clearProps: 'clipPath' });
+        shell.style.clipPath = '';
         setPhase('session');
       },
     });
 
+    /*
+     * The split is driven from a numeric proxy rather than by tweening the
+     * clipPath string. A browser normalises inset(0% 50% 0% 50%) down to the
+     * two value shorthand, and GSAP then interpolates the shorthand against a
+     * four value target, which collapses the left inset to zero and turns the
+     * reveal into a wipe from the left edge. Writing both sides from one number
+     * keeps it symmetric and opening outward from the seam.
+     */
+    const split = { open: 0 };
+    const paint = () => {
+      const inset = (1 - split.open) * 50;
+      shell.style.clipPath = `inset(0% ${inset}% 0% ${inset}%)`;
+    };
+    paint();
+
     gsap.set([canvas, aside], { opacity: 1 });
-    gsap.set(shell, { clipPath: 'inset(0% 50% 0% 50%)' });
     gsap.set(seam, { opacity: 1, scaleY: 0, transformOrigin: '50% 50%' });
 
     timeline
@@ -90,12 +104,8 @@ export function Workspace() {
       .to(seam, { scaleY: 1, duration: 0.42, ease: 'power3.inOut' }, 0.16)
       /* The screen divides, revealing both panels outward from the seam. */
       .to(
-        shell,
-        {
-          clipPath: 'inset(0% 0% 0% 0%)',
-          duration: 0.92,
-          ease: 'power4.inOut',
-        },
+        split,
+        { open: 1, duration: 0.88, ease: 'power4.inOut', onUpdate: paint },
         0.46,
       )
       .to(seam, { opacity: 0, duration: 0.34, ease: 'power2.out' }, 0.72)
@@ -105,8 +115,12 @@ export function Workspace() {
         { opacity: 1, y: 0, duration: 0.42 },
         0.86,
       )
-      /* Damian starts reading before the panels have finished arriving. */
-      .call(() => damian.launch(), undefined, 0.98);
+      /*
+       * Damian starts before any of the canvas is visible. Launching after the
+       * reveal would show the panels announcing that no session is open, and
+       * would put that empty state's backdrop blur over the whole split.
+       */
+      .call(() => damian.launch(), undefined, 0.12);
 
     return () => {
       timeline.kill();
@@ -154,7 +168,7 @@ export function Workspace() {
         <span
           ref={seamRef}
           aria-hidden="true"
-          className="absolute inset-y-0 left-1/2 z-30 w-px bg-cobalt opacity-0 accent-glow"
+          className="absolute inset-y-0 left-1/2 z-30 w-[2px] bg-cobalt opacity-0 accent-glow"
         />
       ) : null}
 
