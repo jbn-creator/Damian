@@ -21,6 +21,7 @@ interface PinPopoverProps {
   pin: AuditPin;
   index: number;
   placement: PinPlacement;
+  screenshot: string | null;
   popoverId: string;
   onClose: () => void;
   onGenerateFix: (pin: AuditPin) => void;
@@ -63,6 +64,7 @@ export function PinPopover({
   pin,
   index,
   placement,
+  screenshot,
   popoverId,
   onClose,
   onGenerateFix,
@@ -164,7 +166,7 @@ export function PinPopover({
               transformOrigin: `${pin.x}% ${pin.y}%`,
             }}
           >
-            <CapturedSurface />
+            <CapturedSurface src={screenshot} />
           </div>
 
           {/* Reticle over the finding. */}

@@ -18,6 +18,8 @@ interface AgentCanvasProps {
   state: DamianState;
   pins: AuditPin[];
   isRunning: boolean;
+  /** The real capture, when Damian managed to take one. */
+  screenshot: string | null;
 }
 
 const ZOOM_STEPS = [1, 1.25, 1.5, 1.75, 2] as const;
@@ -34,7 +36,7 @@ const clamp = (value: number, min: number, max: number) =>
  * never scaled and its anchor can flip without fighting the transform above it.
  */
 export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
-  function AgentCanvas({ url, state, pins, isRunning }, ref) {
+  function AgentCanvas({ url, state, pins, isRunning, screenshot }, ref) {
     const [viewport, setViewport] = useState<ViewportSize>('desktop');
     const [zoomIndex, setZoomIndex] = useState(0);
     const [pinsVisible, setPinsVisible] = useState(true);
@@ -149,6 +151,7 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
           pin={openPin}
           index={openPinIndex}
           placement={placement}
+          screenshot={screenshot}
           popoverId={`popover-${openPin.id}`}
           onClose={closePopover}
           onGenerateFix={handleGenerateFix}
@@ -186,7 +189,7 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                     className="relative origin-center transition-transform duration-500 ease-instrument"
                     style={{ transform: `scale(${zoom})` }}
                   >
-                    <CapturedSurface />
+                    <CapturedSurface src={screenshot} />
                     <PinOverlay
                       pins={pins}
                       zoom={zoom}

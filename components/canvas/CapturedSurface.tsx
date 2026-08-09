@@ -89,7 +89,28 @@ function ChartBars() {
   );
 }
 
-export function CapturedSurface({ className = '' }: { className?: string }) {
+export function CapturedSurface({
+  className = '',
+  src,
+}: {
+  className?: string;
+  /** A real capture. When absent, the simulated surface stands in. */
+  src?: string | null;
+}) {
+  if (src) {
+    return (
+      <div className={`relative w-full overflow-hidden bg-void ${className}`}>
+        {/*
+          A real screenshot of the target, so the pins sit on the thing they
+          describe. Plain img, not next/image: this is a runtime data URL of an
+          arbitrary third party page, which the optimiser cannot help with.
+        */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt="" className="block w-full select-none" draggable={false} />
+      </div>
+    );
+  }
+
   return (
     <div
       aria-hidden="true"

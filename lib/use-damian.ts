@@ -9,8 +9,8 @@ import {
   RUN_DURATION,
   SCORECARD_METRICS,
   STATE_ACTIVITY,
-  STATE_SCHEDULE,
 } from './mock-data';
+import type { DerivedFindings } from './findings';
 import type {
   AuditPin,
   DamianLog,
@@ -19,6 +19,9 @@ import type {
   ScorecardMetric,
   TestCredentials,
 } from './types';
+
+/** Where the run's contents came from. */
+export type RunMode = 'live' | 'demo';
 
 export interface DamianRun {
   /** Target under inspection. */
@@ -37,6 +40,12 @@ export interface DamianRun {
   isRunning: boolean;
   hasCompleted: boolean;
 
+  /** A real screenshot of the target, when Damian managed to take one. */
+  screenshot: string | null;
+  mode: RunMode;
+  /** Why the run fell back to the scripted demo, if it did. */
+  fallbackReason: string | null;
+
   /** Only what Damian has actually said or placed so far. */
   logs: DamianLog[];
   pins: AuditPin[];
@@ -49,8 +58,6 @@ export interface DamianRun {
   reset: () => void;
 }
 
-const PIN_BY_ID = new Map(AUDIT_PINS.map((pin) => [pin.id, pin]));
-
 /*
  * Stable empty arrays. A fresh literal on every render would change identity
  * and restart the effects downstream that key off these lists.
@@ -58,13 +65,24 @@ const PIN_BY_ID = new Map(AUDIT_PINS.map((pin) => [pin.id, pin]));
 const NO_IDEAS: ProductIdea[] = [];
 const NO_METRICS: ScorecardMetric[] = [];
 
+/** The scripted demo, shaped like a derived run so one player handles both. */
+const DEMO_RUN: DerivedFindings = {
+  pins: AUDIT_PINS,
+  logs: DAMIAN_SCRIPT,
+  pinSchedule: PIN_SCHEDULE,
+  ideas: PRODUCT_IDEAS,
+  metrics: SCORECARD_METRICS,
+  duration: RUN_DURATION,
+};
+
 /**
- * The state machine behind the simulated run.
+ * The state machine behind a run.
  *
- * There is no browser here and no network. What there is: a scripted timeline
- * played back on real timers, so the interface has to handle streaming arrival,
- * out of order reads and mid run interaction exactly as it would against a
- * live Chromium session.
+ * Damian opens the real page through the capture route, measures it, and plays
+ * the findings back on real timers so the interface handles streaming arrival
+ * the way it would against any live session. When no browser is available on
+ * the host, it falls back to the scripted demo and says so rather than
+ * pretending a capture happened.
  */
 export function useDamian(): DamianRun {
   /*
@@ -77,9 +95,14 @@ export function useDamian(): DamianRun {
   const [logs, setLogs] = useState<DamianLog[]>([]);
   const [pinIds, setPinIds] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [mode, setMode] = useState<RunMode>('demo');
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [run, setRun] = useState<DerivedFindings>(DEMO_RUN);
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
+  const attempt = useRef(0);
 
   const clearSchedule = useCallback(() => {
     timers.current.forEach(clearTimeout);
@@ -93,88 +116,132 @@ export function useDamian(): DamianRun {
   useEffect(() => clearSchedule, [clearSchedule]);
 
   const reset = useCallback(() => {
+    attempt.current += 1;
     clearSchedule();
     setState('idle');
     setLogs([]);
     setPinIds([]);
     setProgress(0);
+    setScreenshot(null);
+    setFallbackReason(null);
   }, [clearSchedule]);
 
+  /** Play a set of findings back on the clock. */
+  const play = useCallback(
+    (data: DerivedFindings) => {
+      clearSchedule();
+      setRun(data);
+      setLogs([]);
+      setPinIds([]);
+      setProgress(0);
+      setState('scanning');
+
+      const schedule = (at: number, fire: () => void) => {
+        timers.current.push(setTimeout(fire, at));
+      };
+
+      data.logs.forEach((entry) => {
+        schedule(entry.at, () => {
+          const { at: _at, ...log } = entry;
+          void _at;
+          setLogs((current) =>
+            current.some((existing) => existing.id === log.id) ? current : [...current, log],
+          );
+        });
+      });
+
+      data.pinSchedule.forEach(({ pinId, at }) => {
+        schedule(at, () => {
+          setPinIds((current) => (current.includes(pinId) ? current : [...current, pinId]));
+        });
+      });
+
+      schedule(Math.round(data.duration * 0.35), () => setState('analyzing'));
+      schedule(data.duration, () => setState('complete'));
+
+      /* Progress is read from wall clock so it cannot drift from the script. */
+      const startedAt = Date.now();
+      ticker.current = setInterval(() => {
+        const ratio = (Date.now() - startedAt) / data.duration;
+        if (ratio >= 1) {
+          setProgress(100);
+          if (ticker.current !== null) {
+            clearInterval(ticker.current);
+            ticker.current = null;
+          }
+          return;
+        }
+        setProgress(Math.round(ratio * 100));
+      }, 200);
+    },
+    [clearSchedule],
+  );
+
   const launch = useCallback(() => {
+    const target = url.trim();
+    if (target.length === 0) return;
+
+    attempt.current += 1;
+    const ticket = attempt.current;
+
     clearSchedule();
     setLogs([]);
     setPinIds([]);
     setProgress(0);
+    setScreenshot(null);
+    setFallbackReason(null);
     setState('launching');
 
-    const schedule = (at: number, run: () => void) => {
-      timers.current.push(setTimeout(run, at));
+    const fallback = (reason: string) => {
+      if (ticket !== attempt.current) return;
+      setMode('demo');
+      setFallbackReason(reason);
+      play(DEMO_RUN);
     };
 
-    STATE_SCHEDULE.forEach(({ state: next, at }) => {
-      schedule(at, () => setState(next));
-    });
+    fetch('/api/capture', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: target }),
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (ticket !== attempt.current) return;
 
-    DAMIAN_SCRIPT.forEach((entry) => {
-      schedule(entry.at, () => {
-        const { at: _at, ...log } = entry;
-        void _at;
-        setLogs((current) =>
-          current.some((existing) => existing.id === log.id)
-            ? current
-            : [...current, log],
-        );
-      });
-    });
-
-    PIN_SCHEDULE.forEach(({ pinId, at }) => {
-      schedule(at, () => {
-        setPinIds((current) =>
-          current.includes(pinId) ? current : [...current, pinId],
-        );
-      });
-    });
-
-    /* Progress is read from wall clock so it cannot drift from the script. */
-    const startedAt = Date.now();
-    ticker.current = setInterval(() => {
-      const ratio = (Date.now() - startedAt) / RUN_DURATION;
-      if (ratio >= 1) {
-        setProgress(100);
-        if (ticker.current !== null) {
-          clearInterval(ticker.current);
-          ticker.current = null;
+        if (!response.ok) {
+          fallback(
+            payload?.error === 'NO_CHROME'
+              ? 'No browser on this host, so Damian is replaying a recorded session.'
+              : String(payload?.error ?? 'Damian could not open that page.'),
+          );
+          return;
         }
-        return;
-      }
-      setProgress(Math.round(ratio * 100));
-    }, 200);
-  }, [clearSchedule]);
+
+        setMode('live');
+        setScreenshot(payload.screenshot as string);
+        play(payload.findings as DerivedFindings);
+      })
+      .catch(() => fallback('Damian could not reach the capture service.'));
+  }, [url, clearSchedule, play]);
 
   const saveCredentials = useCallback((next: TestCredentials) => {
     setCredentials(
-      next.username.trim().length === 0 && next.password.length === 0
-        ? null
-        : next,
+      next.username.trim().length === 0 && next.password.length === 0 ? null : next,
     );
   }, []);
 
   const clearCredentials = useCallback(() => setCredentials(null), []);
 
-  const pins = useMemo(
-    () =>
-      pinIds
-        .map((id) => PIN_BY_ID.get(id))
-        .filter((pin): pin is AuditPin => Boolean(pin)),
-    [pinIds],
-  );
+  const pins = useMemo(() => {
+    const byId = new Map(run.pins.map((pin) => [pin.id, pin]));
+    return pinIds
+      .map((id) => byId.get(id))
+      .filter((pin): pin is AuditPin => Boolean(pin));
+  }, [pinIds, run]);
 
   const hasCompleted = state === 'complete';
   const isRunning =
     state === 'launching' || state === 'scanning' || state === 'analyzing';
-
-  const ideas: ProductIdea[] = hasCompleted ? PRODUCT_IDEAS : NO_IDEAS;
-  const metrics: ScorecardMetric[] = hasCompleted ? SCORECARD_METRICS : NO_METRICS;
 
   return {
     url,
@@ -187,10 +254,13 @@ export function useDamian(): DamianRun {
     progress: hasCompleted ? 100 : progress,
     isRunning,
     hasCompleted,
+    screenshot,
+    mode,
+    fallbackReason,
     logs,
     pins,
-    ideas,
-    metrics,
+    ideas: hasCompleted ? run.ideas : NO_IDEAS,
+    metrics: hasCompleted ? run.metrics : NO_METRICS,
     launch,
     reset,
   };

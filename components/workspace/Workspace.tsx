@@ -129,6 +129,16 @@ export function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, reduced]);
 
+  /* Say so out loud when the capture did not happen. Never imply it did. */
+  useEffect(() => {
+    if (!damian.fallbackReason) return;
+    push({
+      tone: 'warning',
+      title: 'Showing the recorded session.',
+      detail: damian.fallbackReason,
+    });
+  }, [damian.fallbackReason, push]);
+
   /* Damian announces the board at the end of each run. */
   useEffect(() => {
     if (!damian.hasCompleted) return;
@@ -200,6 +210,7 @@ export function Workspace() {
               state={damian.state}
               pins={damian.pins}
               isRunning={damian.isRunning}
+              screenshot={damian.screenshot}
             />
             <CommandCenter
               ref={asideRef}
