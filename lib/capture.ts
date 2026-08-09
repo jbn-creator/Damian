@@ -56,7 +56,7 @@ export interface DomAudit {
   tinyTapBox: Rect | null;
   headingCount: number;
   landmarkCount: number;
-  contentBox: Rect | null;
+  structureBox: Rect | null;
 }
 
 export interface CaptureResult {
@@ -64,8 +64,17 @@ export interface CaptureResult {
   audit: DomAudit;
 }
 
+/*
+ * The capture is one viewport, not the whole document.
+ *
+ * Resizing the viewport to the full page height reflows responsive layouts
+ * into something no visitor ever sees, and on a wide document it produces an
+ * image several times the width of the content, so the page ends up as a strip
+ * down one side. A viewport frame is what someone looking at the site sees,
+ * which is the only frame the pins mean anything in.
+ */
 const VIEWPORT_WIDTH = 1440;
-const MAX_CAPTURE_HEIGHT = 4200;
+const VIEWPORT_HEIGHT = 900;
 
 /**
  * Reject anything that is not a public http target.
@@ -75,9 +84,13 @@ const MAX_CAPTURE_HEIGHT = 4200;
  * Not a corner worth cutting.
  */
 export function assertPublicHttpUrl(raw: string): URL {
+  const trimmed = raw.trim();
+  /* A person types craigslist.org, not https://craigslist.org. */
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(withScheme);
   } catch {
     throw new Error('That is not a URL Damian can open.');
   }
@@ -110,17 +123,24 @@ export function assertPublicHttpUrl(raw: string): URL {
 /** The measurement script. Runs in the page and returns plain data. */
 const AUDIT_SCRIPT = `JSON.stringify((() => {
   const W = innerWidth;
-  const H = document.documentElement.scrollHeight;
+  const H = innerHeight;
   const pct = (el) => {
     const r = el.getBoundingClientRect();
-    const top = r.top + scrollY;
     return {
       x: +((r.left + r.width / 2) / W * 100).toFixed(2),
-      y: +((top + r.height / 2) / H * 100).toFixed(2),
+      y: +((r.top + r.height / 2) / H * 100).toFixed(2),
       w: +(r.width / W * 100).toFixed(2),
       h: +(r.height / H * 100).toFixed(2),
     };
   };
+  // Counts run over the whole document. Pins may only anchor to something
+  // inside the frame that was photographed.
+  const inFrame = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < H && r.right > 0 && r.left < W;
+  };
+  const firstInFrame = (list) => list.find(inFrame) || null;
+  const boxOf = (el) => (el && inFrame(el) ? pct(el) : null);
   const seen = (el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -134,7 +154,10 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
   const required = fields.filter(
     (el) => el.required || el.getAttribute('aria-required') === 'true',
   );
-  const form = fields[0] ? fields[0].closest('form') || fields[0] : null;
+  const form = (() => {
+    const field = firstInFrame(fields) || fields[0];
+    return field ? field.closest('form') || field : null;
+  })();
 
   const h1 = [...document.querySelectorAll('h1')].find(seen) || null;
   const h1Text = h1 ? h1.textContent.replace(/\\s+/g, ' ').trim() : null;
@@ -152,26 +175,27 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     return r.height < 24 || r.width < 24;
   });
 
-  const main = document.querySelector('main') || document.body;
+  // Anchor the structural finding to the topmost heading actually on screen.
+  const headings = [...document.querySelectorAll('h1, h2, h3')].filter(seen);
 
   return {
     title: document.title || location.hostname,
     url: location.href,
     h1: h1Text ? h1Text.slice(0, 160) : null,
-    h1Box: h1 ? pct(h1) : null,
+    h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,
     fieldCount: fields.length,
     requiredCount: required.length,
-    formBox: form ? pct(form) : null,
+    formBox: boxOf(form),
     images: imgs.length,
     imagesMissingAlt: noAlt.length,
-    missingAltBox: noAlt[0] ? pct(noAlt[0]) : null,
+    missingAltBox: boxOf(firstInFrame(noAlt)),
     interactive: interactive.length,
     tinyTapTargets: tiny.length,
-    tinyTapBox: tiny[0] ? pct(tiny[0]) : null,
+    tinyTapBox: boxOf(firstInFrame(tiny)),
     headingCount: [...document.querySelectorAll('h1,h2,h3')].filter(seen).length,
     landmarkCount: document.querySelectorAll('main, nav, header, footer, aside').length,
-    contentBox: main ? pct(main) : null,
+    structureBox: boxOf(firstInFrame(headings)),
   };
 })())`;
 
@@ -272,7 +296,7 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
     await send('Runtime.enable');
     await send('Emulation.setDeviceMetricsOverride', {
       width: VIEWPORT_WIDTH,
-      height: 900,
+      height: VIEWPORT_HEIGHT,
       deviceScaleFactor: 1,
       mobile: false,
     });
@@ -296,33 +320,12 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
       return JSON.parse(result.result?.value ?? '{}') as T;
     };
 
-    /*
-     * Resize to the full document before measuring, so the percentages the
-     * audit returns are percentages of the image that gets captured. Capped,
-     * because some pages scroll forever.
-     */
-    const metrics = (await send('Page.getLayoutMetrics')) as {
-      cssContentSize?: { height: number };
-      contentSize?: { height: number };
-    };
-    const fullHeight = Math.min(
-      Math.max(metrics.cssContentSize?.height ?? metrics.contentSize?.height ?? 900, 900),
-      MAX_CAPTURE_HEIGHT,
-    );
-    await send('Emulation.setDeviceMetricsOverride', {
-      width: VIEWPORT_WIDTH,
-      height: fullHeight,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-    await new Promise((r) => setTimeout(r, 600));
-
     const audit = await evaluate<DomAudit>(AUDIT_SCRIPT);
 
     const shot = (await send('Page.captureScreenshot', {
       format: 'jpeg',
-      quality: 76,
-      captureBeyondViewport: true,
+      quality: 78,
+      captureBeyondViewport: false,
     })) as { data: string };
 
     return {

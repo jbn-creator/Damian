@@ -85,11 +85,11 @@ function buildRules(audit: DomAudit): Rule[] {
     rules.push({
       id: 'no-h1',
       says: ['No h1 on the page. Nothing declares what this is.'],
-      pin: anchored(audit.contentBox)
+      pin: anchored(audit.structureBox)
         ? {
             id: 'pin-no-h1',
-            x: audit.contentBox.x,
-            y: Math.min(audit.contentBox.y, 22),
+            x: audit.structureBox.x,
+            y: audit.structureBox.y,
             type: 'warning',
             title: 'No h1 on the page.',
             description:
@@ -208,11 +208,11 @@ function buildRules(audit: DomAudit): Rule[] {
       says: [
         `Structure holds. ${audit.landmarkCount} landmarks, ${audit.headingCount} headings.`,
       ],
-      pin: anchored(audit.contentBox)
+      pin: anchored(audit.structureBox)
         ? {
             id: 'pin-structure',
-            x: audit.contentBox.x,
-            y: Math.min(Math.max(audit.contentBox.y, 55), 92),
+            x: audit.structureBox.x,
+            y: audit.structureBox.y,
             type: 'opportunity',
             title: 'Document structure is sound.',
             description: `Damian counted ${audit.landmarkCount} landmark regions and ${audit.headingCount} headings on ${host}. The outline is real, which means assistive technology can navigate this page by structure rather than by guessing.`,
@@ -239,7 +239,23 @@ export interface DerivedFindings {
 /** Turn a measured page into everything the interface needs to play a run. */
 export function deriveFindings(audit: DomAudit): DerivedFindings {
   const rules = buildRules(audit);
-  const pins = rules.map((rule) => rule.pin).filter((pin): pin is AuditPin => Boolean(pin));
+
+  /*
+   * Two rules can anchor to the same element, and a pin sitting exactly on top
+   * of another one hides it. Nudge collisions apart so every finding stays
+   * clickable, keeping the first one where it was measured.
+   */
+  const placed: AuditPin[] = [];
+  rules.forEach((rule) => {
+    if (!rule.pin) return;
+    const pin = { ...rule.pin };
+    while (placed.some((other) => Math.hypot(other.x - pin.x, other.y - pin.y) < 3.2)) {
+      pin.x = clamp(pin.x + 3.4, 2, 98);
+      pin.y = clamp(pin.y + 2.2, 2, 98);
+    }
+    placed.push(pin);
+  });
+  const pins = placed;
   const ideas = rules
     .map((rule) => rule.idea)
     .filter((idea): idea is ProductIdea => Boolean(idea));

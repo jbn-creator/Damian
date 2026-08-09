@@ -178,8 +178,12 @@ export function useDamian(): DamianRun {
   );
 
   const launch = useCallback(() => {
-    const target = url.trim();
-    if (target.length === 0) return;
+    const raw = url.trim();
+    if (raw.length === 0) return;
+
+    /* A person types craigslist.org. Give it the scheme they meant, once. */
+    const target = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+    if (target !== url) setUrl(target);
 
     attempt.current += 1;
     const ticket = attempt.current;
