@@ -8,6 +8,17 @@ assembles a board of product improvement opportunities while you watch.
 
 Damian is the product. He is not a chatbot and not a wrapper around a text box.
 
+## Two screens
+
+`/` is the landing page: one word at display scale with a live cursor, one line
+of explanation, one action, and a poster of the product below it.
+
+`/try` is the workspace. It opens as a composer in the middle of the screen,
+because that is where a person expects to type. Handing over a target draws a
+seam down the middle and splits the screen open along it, revealing the canvas
+on the left and the command center on the right. The nav carries those two
+destinations and nothing else: no inputs live in it.
+
 ## Running it
 
 ```
@@ -59,15 +70,21 @@ Two constraints are enforced by `tailwind.config.ts` rather than by review. The
 outside the token set will not compile as a utility, and `rounded-none`,
 `rounded-sm` and `rounded-md` do not exist.
 
-Type is Syne for display and Plus Jakarta Sans for body and numeric data,
-loaded through `next/font/google`.
+Type is Space Grotesk for display and Plus Jakarta Sans for body and numeric
+data, loaded through `next/font/google`. Space Grotesk is the neutral geometric
+grotesque the direction calls for, and it carries a one word headline at 9rem
+without needing help.
+
+The white pill is the only place chalk is used as a fill. It marks the single
+primary action on any given screen, and cobalt stays semantic: focus, live
+agent state, and the seam the workspace splits along.
 
 ## Motion ownership
 
 The two animation systems are split by job, and where they sit near each other
 they are separated by a DOM level so neither writes a property the other owns.
 
-GSAP owns the orchestrated entrance timeline in `app/page.tsx`, the streaming
+GSAP owns the landing entrance, the split transition in `Workspace.tsx`, the streaming
 telemetry reveal in `DamianFeed`, the pin drop sequence in `PinOverlay`, and the
 radial stroke dash offset and numeral count in `Scorecard`.
 
@@ -85,9 +102,10 @@ read the same media query through `lib/use-media-query.ts`.
 
 ## Scope
 
-Built: header control bar, split screen workspace, canvas with browser chrome
-and the pin system, three command center tabs, credentials modal, and the mock
-data driving all of it.
+Built: landing page, site nav, launch composer, the seam split transition,
+session strip, split screen workspace, canvas with browser chrome and the pin
+system, three command center tabs, credentials modal, and the mock data driving
+all of it.
 
 Deliberately not built in this pass: canvas pan and freeform zoom, screenshot
 export to file, and viewport switching that reflows the capture. The viewport
