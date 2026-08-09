@@ -232,7 +232,7 @@ export function Workspace() {
           push({
             tone: 'accent',
             title: 'Credentials handed to Damian.',
-            detail: 'He will sign in and inspect the gated screens on the next run.',
+            detail: 'Held for this session. Damian does not sign in yet, so this run covers the public page only.',
           });
         }}
         onClear={() => {
