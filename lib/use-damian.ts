@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AUDIT_PINS,
   DAMIAN_SCRIPT,
-  DEFAULT_TARGET_URL,
   PIN_SCHEDULE,
   PRODUCT_IDEAS,
   RUN_DURATION,
@@ -68,7 +67,11 @@ const NO_METRICS: ScorecardMetric[] = [];
  * live Chromium session.
  */
 export function useDamian(): DamianRun {
-  const [url, setUrl] = useState(DEFAULT_TARGET_URL);
+  /*
+   * The composer opens empty, so the placeholder and the example targets are
+   * doing real work and the send button starts correctly disabled.
+   */
+  const [url, setUrl] = useState('');
   const [credentials, setCredentials] = useState<TestCredentials | null>(null);
   const [state, setState] = useState<DamianState>('idle');
   const [logs, setLogs] = useState<DamianLog[]>([]);
