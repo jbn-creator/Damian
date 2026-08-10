@@ -62,9 +62,15 @@ export const Composer = forwardRef<HTMLDivElement, ComposerProps>(
                 className="pointer-events-none absolute left-3.5 h-4 w-4 text-silver"
                 strokeWidth={2}
               />
+              {/*
+                Text, not url. Native url validation rejects a bare domain, so
+                the form silently refuses to submit when someone types
+                craigslist.org. The target is validated on the server, which
+                can also explain itself when it says no.
+              */}
               <input
                 id={fieldId}
-                type="url"
+                type="text"
                 inputMode="url"
                 autoComplete="url"
                 spellCheck={false}

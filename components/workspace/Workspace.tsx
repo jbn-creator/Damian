@@ -13,6 +13,10 @@ import { usePrefersReducedMotion } from '@/lib/use-media-query';
 
 type Phase = 'composer' | 'splitting' | 'session';
 
+/** Damian counts things, so he should be able to say one of them. */
+const plural = (count: number, one: string, many = `${one}s`) =>
+  `${count} ${count === 1 ? one : many}`;
+
 /**
  * The Try Damian surface.
  *
@@ -145,7 +149,7 @@ export function Workspace() {
     push({
       tone: 'success',
       title: 'Damian finished the pass.',
-      detail: `${damian.ideas.length} opportunities on the board. ${damian.pins.length} pins on the canvas.`,
+      detail: `${plural(damian.ideas.length, 'opportunity', 'opportunities')} on the board. ${plural(damian.pins.length, 'pin')} on the canvas.`,
     });
   }, [damian.hasCompleted, damian.ideas.length, damian.pins.length, push]);
 
