@@ -174,7 +174,52 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
         aria-label="Damian's canvas"
         className="relative flex min-h-0 shrink-0 flex-col overflow-hidden border-hairline bg-void opacity-0 max-lg:h-[54%] lg:w-[60%] lg:shrink lg:border-r"
       >
-        <BrowserChrome url={url} viewport={viewport} onViewportChange={setViewport} />
+        <BrowserChrome
+          url={page?.url ?? url}
+          viewport={viewport}
+          onViewportChange={setViewport}
+        />
+
+        {/*
+          The pages Damian walked. It follows him while he is still going, and
+          becomes yours to move through once he stops.
+        */}
+        {pages.length > 1 ? (
+          <nav
+            aria-label="Pages Damian walked"
+            className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-b border-hairline bg-obsidian/60 px-3 py-2"
+          >
+            {pages.map((walked, index) => {
+              const current = index === activePage;
+              const count = walked.notes.length;
+              return (
+                <button
+                  key={walked.url}
+                  type="button"
+                  aria-current={current ? 'true' : undefined}
+                  onClick={() => onSelectPage(index)}
+                  className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-tiny font-medium transition-colors duration-200 ease-instrument ${
+                    current
+                      ? 'border-cobalt/40 bg-cobalt/10 text-chalk'
+                      : 'border-hairline text-silver hover:border-silver/50 hover:text-chalk'
+                  }`}
+                >
+                  <span className="max-w-[11rem] truncate">{walked.label}</span>
+                  {count > 0 ? (
+                    <span
+                      data-numeric
+                      className={`rounded-full px-1.5 text-micro font-bold ${
+                        current ? 'bg-cobalt/20 text-chalk' : 'bg-hairline text-silver'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+        ) : null}
 
         {/*
           Stage bounds. This wrapper is the positioning context for the compact
@@ -265,9 +310,9 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                 <ScanLine aria-hidden="true" className="h-3 w-3" strokeWidth={2} />
                 <span data-numeric>
                   {isRunning
-                    ? 'Live session. Damian is reading.'
+                    ? `Walking the site. ${pages.length} ${pages.length === 1 ? 'page' : 'pages'} so far.`
                     : pins.length > 0
-                      ? `${pins.length} pin${pins.length === 1 ? '' : 's'} placed on this capture`
+                      ? `${pins.length} ${pins.length === 1 ? 'note' : 'notes'} on this page`
                       : 'Static capture. Awaiting instruction.'}
                 </span>
               </p>
