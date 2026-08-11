@@ -149,9 +149,9 @@ export function Workspace() {
     push({
       tone: 'success',
       title: 'Damian finished the pass.',
-      detail: `${plural(damian.ideas.length, 'opportunity', 'opportunities')} on the board. ${plural(damian.pins.length, 'pin')} on the canvas.`,
+      detail: `${plural(damian.ideas.length, 'opportunity', 'opportunities')} on the board, across ${plural(damian.pages.length, 'page')}.`,
     });
-  }, [damian.hasCompleted, damian.ideas.length, damian.pins.length, push]);
+  }, [damian.hasCompleted, damian.ideas.length, damian.pages.length, push]);
 
   const handleNewTarget = () => {
     damian.reset();
@@ -212,9 +212,11 @@ export function Workspace() {
               ref={canvasRef}
               url={damian.url}
               state={damian.state}
-              pins={damian.pins}
+              notes={damian.visibleNotes}
               isRunning={damian.isRunning}
-              screenshot={damian.screenshot}
+              pages={damian.pages}
+              activePage={damian.activePage}
+              onSelectPage={damian.setActivePage}
             />
             <CommandCenter
               ref={asideRef}

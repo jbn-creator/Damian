@@ -9,8 +9,8 @@ import { join } from 'node:path';
  * Chrome is already installed on the machine running the server.
  *
  * No dependency: Node ships WebSocket and fetch. No API key, no quota, no
- * model call. The findings this returns are measured off the DOM, so every
- * number Damian quotes is one he actually counted.
+ * model call. Everything reported here is measured, so every number Damian
+ * quotes is one he actually counted.
  *
  * Ceiling: needs a Chrome binary on the host, so this works in local dev and
  * in a container, and not on serverless. The caller falls back to the scripted
@@ -31,12 +31,26 @@ export function findChrome(): string | null {
   return CHROME_PATHS.find((path) => existsSync(path)) ?? null;
 }
 
-/** Element rectangle, in percentages of the captured image. */
+/** Element rectangle, in percentages of the captured viewport. */
 export interface Rect {
   x: number;
   y: number;
   w: number;
   h: number;
+}
+
+/** A contrast failure Damian can point at. */
+export interface ContrastMiss {
+  ratio: number;
+  sample: string;
+  box: Rect;
+}
+
+/** A control coloured unlike every other control around it. */
+export interface ColourOutlier {
+  colour: string;
+  dominant: string;
+  box: Rect;
 }
 
 export interface DomAudit {
@@ -45,6 +59,8 @@ export interface DomAudit {
   h1: string | null;
   h1Box: Rect | null;
   h1HasNumber: boolean;
+  h1Align: string | null;
+  bodyAlign: string | null;
   fieldCount: number;
   requiredCount: number;
   formBox: Rect | null;
@@ -57,24 +73,26 @@ export interface DomAudit {
   headingCount: number;
   landmarkCount: number;
   structureBox: Rect | null;
+  fontFamilies: string[];
+  fontBox: Rect | null;
+  worstContrast: ContrastMiss | null;
+  contrastMisses: number;
+  colourOutlier: ColourOutlier | null;
 }
 
-export interface CaptureResult {
+export interface PageCapture {
+  url: string;
+  /** Short label for the page switcher, such as "/solutions". */
+  label: string;
   screenshot: string;
   audit: DomAudit;
 }
 
-/*
- * The capture is one viewport, not the whole document.
- *
- * Resizing the viewport to the full page height reflows responsive layouts
- * into something no visitor ever sees, and on a wide document it produces an
- * image several times the width of the content, so the page ends up as a strip
- * down one side. A viewport frame is what someone looking at the site sees,
- * which is the only frame the pins mean anything in.
- */
 const VIEWPORT_WIDTH = 1440;
 const VIEWPORT_HEIGHT = 900;
+
+/** How many pages Damian walks, including the one he was handed. */
+export const MAX_PAGES = 5;
 
 /**
  * Reject anything that is not a public http target.
@@ -120,7 +138,14 @@ export function assertPublicHttpUrl(raw: string): URL {
   return parsed;
 }
 
-/** The measurement script. Runs in the page and returns plain data. */
+/**
+ * The measurement script. Runs in the page and returns plain data.
+ *
+ * Beyond counting, it computes what a designer would actually notice: text
+ * that fails contrast against whatever is behind it, how many typefaces are in
+ * play, and whether one control is coloured unlike everything around it. All
+ * arithmetic, so none of it needs a model.
+ */
 const AUDIT_SCRIPT = `JSON.stringify((() => {
   const W = innerWidth;
   const H = innerHeight;
@@ -133,19 +158,45 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
       h: +(r.height / H * 100).toFixed(2),
     };
   };
-  // Counts run over the whole document. Pins may only anchor to something
-  // inside the frame that was photographed.
+  const seen = (el) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' &&
+      s.display !== 'none' && s.opacity !== '0';
+  };
   const inFrame = (el) => {
     const r = el.getBoundingClientRect();
     return r.bottom > 0 && r.top < H && r.right > 0 && r.left < W;
   };
   const firstInFrame = (list) => list.find(inFrame) || null;
   const boxOf = (el) => (el && inFrame(el) ? pct(el) : null);
-  const seen = (el) => {
-    const r = el.getBoundingClientRect();
-    const s = getComputedStyle(el);
-    return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' &&
-      s.display !== 'none' && s.opacity !== '0';
+
+  const rgb = (value) => {
+    const m = String(value).match(/rgba?\\(([^)]+)\\)/);
+    if (!m) return null;
+    const parts = m[1].split(',').map((n) => parseFloat(n));
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  };
+  const lum = (c) => {
+    const f = (v) => {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const ratio = (a, b) => {
+    const la = lum(a), lb = lum(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  };
+  const behind = (el) => {
+    let node = el;
+    while (node && node !== document.documentElement) {
+      const c = rgb(getComputedStyle(node).backgroundColor);
+      if (c && c.a > 0.85) return c;
+      node = node.parentElement;
+    }
+    const c = rgb(getComputedStyle(document.body).backgroundColor);
+    return c && c.a > 0.85 ? c : { r: 255, g: 255, b: 255, a: 1 };
   };
 
   const fields = [...document.querySelectorAll('input, select, textarea')].filter(
@@ -167,16 +218,65 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
 
   const interactive = [...document.querySelectorAll('button, a[href], [role=button], input, select')].filter(seen);
   const tiny = interactive.filter((el) => {
-    // 2.5.8 exempts a link sitting inline in a run of text, so an inline
-    // display is not a finding. Counting those turns every article into a
-    // hundred false positives.
+    // 2.5.8 exempts a link sitting inline in a run of text.
     if (getComputedStyle(el).display === 'inline') return false;
     const r = el.getBoundingClientRect();
     return r.height < 24 || r.width < 24;
   });
 
-  // Anchor the structural finding to the topmost heading actually on screen.
   const headings = [...document.querySelectorAll('h1, h2, h3')].filter(seen);
+
+  const families = new Map();
+  const misses = [];
+  const textish = [...document.querySelectorAll('p, h1, h2, h3, h4, li, a, span, button, label, td')]
+    .filter((el) => seen(el) && inFrame(el))
+    .slice(0, 400);
+
+  for (const el of textish) {
+    const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 1);
+    if (!own) continue;
+    const s = getComputedStyle(el);
+    const family = s.fontFamily.split(',')[0].replace(/["']/g, '').trim();
+    families.set(family, (families.get(family) || 0) + 1);
+
+    const fg = rgb(s.color);
+    if (!fg || fg.a < 0.5) continue;
+    const bg = behind(el);
+    const size = parseFloat(s.fontSize);
+    const bold = parseInt(s.fontWeight, 10) >= 700;
+    const large = size >= 24 || (size >= 18.66 && bold);
+    const floor = large ? 3 : 4.5;
+    const r = ratio(fg, bg);
+    if (r < floor) {
+      misses.push({
+        ratio: +r.toFixed(2),
+        sample: el.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60),
+        box: pct(el),
+      });
+    }
+  }
+  misses.sort((a, b) => a.ratio - b.ratio);
+
+  const swatches = new Map();
+  for (const el of interactive.filter(inFrame)) {
+    const c = rgb(getComputedStyle(el).backgroundColor);
+    if (!c || c.a < 0.5) continue;
+    const key = c.r + ',' + c.g + ',' + c.b;
+    if (!swatches.has(key)) swatches.set(key, { count: 0, el });
+    swatches.get(key).count += 1;
+  }
+  const ranked = [...swatches.entries()].sort((a, b) => b[1].count - a[1].count);
+  let outlier = null;
+  if (ranked.length > 2 && ranked[0][1].count >= 3) {
+    const rare = ranked[ranked.length - 1];
+    if (rare[1].count === 1) {
+      outlier = {
+        colour: 'rgb(' + rare[0] + ')',
+        dominant: 'rgb(' + ranked[0][0] + ')',
+        box: pct(rare[1].el),
+      };
+    }
+  }
 
   return {
     title: document.title || location.hostname,
@@ -184,6 +284,8 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     h1: h1Text ? h1Text.slice(0, 160) : null,
     h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,
+    h1Align: h1 ? getComputedStyle(h1).textAlign : null,
+    bodyAlign: getComputedStyle(document.body).textAlign,
     fieldCount: fields.length,
     requiredCount: required.length,
     formBox: boxOf(form),
@@ -193,15 +295,50 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     interactive: interactive.length,
     tinyTapTargets: tiny.length,
     tinyTapBox: boxOf(firstInFrame(tiny)),
-    headingCount: [...document.querySelectorAll('h1,h2,h3')].filter(seen).length,
+    headingCount: headings.length,
     landmarkCount: document.querySelectorAll('main, nav, header, footer, aside').length,
     structureBox: boxOf(firstInFrame(headings)),
+    fontFamilies: [...families.keys()].slice(0, 6),
+    fontBox: boxOf(textish[0]),
+    worstContrast: misses[0] || null,
+    contrastMisses: misses.length,
+    colourOutlier: outlier,
   };
 })())`;
 
-/** Open the target, let it settle, measure it, photograph it. */
-export async function capture(rawUrl: string): Promise<CaptureResult> {
-  const url = assertPublicHttpUrl(rawUrl);
+/** Same origin links worth walking, in the order a visitor would meet them. */
+const LINKS_SCRIPT = `JSON.stringify((() => {
+  const here = location.origin;
+  const seenPaths = new Set([location.pathname.replace(/\\/$/, '')]);
+  const out = [];
+  const scopes = [...document.querySelectorAll('nav, header')];
+  const pool = scopes.length
+    ? scopes.flatMap((s) => [...s.querySelectorAll('a[href]')])
+    : [...document.querySelectorAll('a[href]')];
+  for (const a of pool) {
+    let u;
+    try { u = new URL(a.href, location.href); } catch { continue; }
+    if (u.origin !== here) continue;
+    if (!/^https?:$/.test(u.protocol)) continue;
+    const path = u.pathname.replace(/\\/$/, '');
+    if (!path || seenPaths.has(path)) continue;
+    if (/\\.(pdf|zip|png|jpe?g|svg|mp4|dmg|exe)$/i.test(path)) continue;
+    seenPaths.add(path);
+    out.push({ url: u.origin + u.pathname, label: path });
+    if (out.length >= 12) break;
+  }
+  return out;
+})())`;
+
+interface Session {
+  send: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  evaluate: <T>(expression: string) => Promise<T>;
+  goto: (url: string) => Promise<void>;
+  close: () => Promise<void>;
+}
+
+/** Boot one browser and keep it for the whole walk. */
+async function openSession(): Promise<Session> {
   const binary = findChrome();
   if (!binary) throw new Error('NO_CHROME');
 
@@ -228,8 +365,9 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
   let socket: WebSocket | null = null;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   let messageId = 0;
+  let loaded = false;
 
-  const cleanup = async () => {
+  const close = async () => {
     try {
       socket?.close();
     } catch {
@@ -255,7 +393,6 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
   };
 
   try {
-    /* Wait for the debugging endpoint rather than guessing a boot time. */
     let endpoint: string | null = null;
     for (let attempt = 0; attempt < 60; attempt += 1) {
       try {
@@ -279,7 +416,6 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
       socket?.addEventListener('error', () => reject(new Error('Could not attach to Chrome.')));
     });
 
-    let loaded = false;
     socket.addEventListener('message', (event) => {
       const data = JSON.parse(String(event.data));
       if (data.id && pending.has(data.id)) {
@@ -301,15 +437,6 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
       mobile: false,
     });
 
-    await send('Page.navigate', { url: url.href });
-
-    /* Wait for load, then a short settle for the paint that follows it. */
-    const deadline = Date.now() + 15000;
-    while (!loaded && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    await new Promise((r) => setTimeout(r, 1200));
-
     const evaluate = async <T>(expression: string): Promise<T> => {
       const result = (await send('Runtime.evaluate', {
         expression,
@@ -320,19 +447,78 @@ export async function capture(rawUrl: string): Promise<CaptureResult> {
       return JSON.parse(result.result?.value ?? '{}') as T;
     };
 
-    const audit = await evaluate<DomAudit>(AUDIT_SCRIPT);
-
-    const shot = (await send('Page.captureScreenshot', {
-      format: 'jpeg',
-      quality: 78,
-      captureBeyondViewport: false,
-    })) as { data: string };
-
-    return {
-      screenshot: `data:image/jpeg;base64,${shot.data}`,
-      audit: { ...audit, url: url.href },
+    const goto = async (url: string) => {
+      loaded = false;
+      await send('Page.navigate', { url });
+      const deadline = Date.now() + 15000;
+      while (!loaded && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      /* A short settle for the paint that follows load. */
+      await new Promise((r) => setTimeout(r, 1100));
     };
+
+    return { send, evaluate, goto, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+async function shoot(session: Session): Promise<string> {
+  const shot = (await session.send('Page.captureScreenshot', {
+    format: 'jpeg',
+    quality: 78,
+    captureBeyondViewport: false,
+  })) as { data: string };
+  return `data:image/jpeg;base64,${shot.data}`;
+}
+
+const labelFor = (url: URL) => {
+  const path = url.pathname.replace(/\/$/, '');
+  return path.length ? path : '/';
+};
+
+/**
+ * Walk the site.
+ *
+ * The entry page first, then whatever the navigation points at, each page
+ * handed back the moment it is captured so the interface can show the walk
+ * happening rather than waiting for the whole thing. One browser for the whole
+ * trip, because booting Chrome is most of the cost.
+ */
+export async function* crawl(rawUrl: string): AsyncGenerator<PageCapture> {
+  const entry = assertPublicHttpUrl(rawUrl);
+  const session = await openSession();
+
+  try {
+    await session.goto(entry.href);
+
+    const audit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
+    yield {
+      url: entry.href,
+      label: labelFor(entry),
+      screenshot: await shoot(session),
+      audit: { ...audit, url: entry.href },
+    };
+
+    const links = await session.evaluate<{ url: string; label: string }[]>(LINKS_SCRIPT);
+
+    for (const link of links.slice(0, MAX_PAGES - 1)) {
+      try {
+        await session.goto(link.url);
+        const pageAudit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
+        yield {
+          url: link.url,
+          label: link.label,
+          screenshot: await shoot(session),
+          audit: { ...pageAudit, url: link.url },
+        };
+      } catch {
+        /* One bad page does not end the walk. */
+      }
+    }
   } finally {
-    await cleanup();
+    await session.close();
   }
 }

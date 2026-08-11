@@ -23,6 +23,13 @@ export interface AuditPin {
   description: string;
   impactScore: number;
   suggestedFix: string;
+  /** Extension: the element box, so the note can frame what it is about. */
+  w?: number;
+  h?: number;
+  /** Extension: what Damian says out loud. About three lines, plain speech. */
+  note?: string;
+  /** Extension: which captured page this belongs to. */
+  page?: number;
 }
 
 export interface ProductIdea {

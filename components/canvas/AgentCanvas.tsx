@@ -12,14 +12,18 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { useIsCompact, usePrefersReducedMotion } from '@/lib/use-media-query';
 import { useToast } from '@/components/ui/Toast';
 import type { AuditPin, DamianState, ViewportSize } from '@/lib/types';
+import type { CapturedPage } from '@/lib/use-damian';
 
 interface AgentCanvasProps {
   url: string;
   state: DamianState;
-  pins: AuditPin[];
+  /** Notes revealed so far on the page being shown. */
+  notes: AuditPin[];
   isRunning: boolean;
-  /** The real capture, when Damian managed to take one. */
-  screenshot: string | null;
+  /** Every page walked so far. */
+  pages: CapturedPage[];
+  activePage: number;
+  onSelectPage: (index: number) => void;
 }
 
 const ZOOM_STEPS = [1, 1.25, 1.5, 1.75, 2] as const;
@@ -36,7 +40,13 @@ const clamp = (value: number, min: number, max: number) =>
  * never scaled and its anchor can flip without fighting the transform above it.
  */
 export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
-  function AgentCanvas({ url, state, pins, isRunning, screenshot }, ref) {
+  function AgentCanvas(
+    { url, state, notes, isRunning, pages, activePage, onSelectPage },
+    ref,
+  ) {
+    const page = pages[activePage] ?? null;
+    const screenshot = page?.screenshot ?? null;
+    const pins = notes;
     const [viewport, setViewport] = useState<ViewportSize>('desktop');
     const [zoomIndex, setZoomIndex] = useState(0);
     const [pinsVisible, setPinsVisible] = useState(true);

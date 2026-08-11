@@ -1,22 +1,28 @@
-import { NextResponse } from 'next/server';
-import { capture, findChrome } from '@/lib/capture';
-import { deriveFindings } from '@/lib/findings';
+import { crawl, findChrome, type PageCapture } from '@/lib/capture';
+import { analysePage, summarise } from '@/lib/findings';
 
 /* Chrome is spawned per request, so this cannot run on the edge. */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
+/**
+ * The walk, streamed.
+ *
+ * One newline delimited JSON object per event, flushed as it happens, so the
+ * interface can show Damian moving through the site instead of staring at a
+ * spinner until the whole crawl finishes.
+ */
 export async function POST(request: Request) {
   let url: unknown;
   try {
     ({ url } = await request.json());
   } catch {
-    return NextResponse.json({ error: 'Send a JSON body with a url.' }, { status: 400 });
+    return Response.json({ error: 'Send a JSON body with a url.' }, { status: 400 });
   }
 
   if (typeof url !== 'string' || url.trim().length === 0) {
-    return NextResponse.json({ error: 'Damian needs a URL to open.' }, { status: 400 });
+    return Response.json({ error: 'Damian needs a URL to open.' }, { status: 400 });
   }
 
   if (!findChrome()) {
@@ -25,17 +31,49 @@ export async function POST(request: Request) {
      * client falls back to the scripted demo and says so, rather than
      * pretending a capture happened.
      */
-    return NextResponse.json({ error: 'NO_CHROME' }, { status: 503 });
+    return Response.json({ error: 'NO_CHROME' }, { status: 503 });
   }
 
-  try {
-    const { screenshot, audit } = await capture(url.trim());
-    return NextResponse.json({ screenshot, audit, findings: deriveFindings(audit) });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Damian could not open that page.';
-    return NextResponse.json(
-      { error: message },
-      { status: message === 'NO_CHROME' ? 503 : 422 },
-    );
-  }
+  const target = url.trim();
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const emit = (event: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      };
+
+      const captures: PageCapture[] = [];
+
+      try {
+        for await (const capture of crawl(target)) {
+          const index = captures.length;
+          captures.push(capture);
+          const { notes, says } = analysePage(capture, index);
+          emit({ type: 'page', index, capture, notes, says });
+        }
+
+        if (captures.length === 0) {
+          emit({ type: 'error', error: 'Damian could not open that page.' });
+        } else {
+          emit({ type: 'done', ...summarise(captures) });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Damian could not open that page.';
+        emit({ type: 'error', error: message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-store, no-transform',
+      /* Keep proxies from holding the chunks back. */
+      'x-accel-buffering': 'no',
+    },
+  });
 }
