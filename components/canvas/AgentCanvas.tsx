@@ -6,7 +6,7 @@ import { Radar, ScanLine } from 'lucide-react';
 import { BrowserChrome } from './BrowserChrome';
 import { CanvasControls } from './CanvasControls';
 import { CapturedSurface } from './CapturedSurface';
-import { PinOverlay } from './PinOverlay';
+import { NoteOverlay } from './NoteOverlay';
 import { PinPopover, type PinPlacement } from './PinPopover';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useIsCompact, usePrefersReducedMotion } from '@/lib/use-media-query';
@@ -200,16 +200,15 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                     style={{ transform: `scale(${zoom})` }}
                   >
                     <CapturedSurface src={screenshot} />
-                    <PinOverlay
-                      pins={pins}
+                    <NoteOverlay
+                      notes={pins}
                       zoom={zoom}
                       visible={pinsVisible}
-                      openPinId={openPinId}
-                      onTogglePin={(pinId) =>
-                        setOpenPinId((current) => (current === pinId ? null : pinId))
+                      openNoteId={openPinId}
+                      onToggleNote={(noteId) =>
+                        setOpenPinId((current) => (current === noteId ? null : noteId))
                       }
-                      popoverIdFor={(pinId) => `popover-${pinId}`}
-                      registerMarker={registerMarker}
+                      registerNote={registerMarker}
                     />
                   </div>
 
