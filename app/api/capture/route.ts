@@ -44,12 +44,14 @@ export async function POST(request: Request) {
       };
 
       const captures: PageCapture[] = [];
+      /* Carried across pages so a repeated finding is not read out five times. */
+      const seenRules = new Set<string>();
 
       try {
         for await (const capture of crawl(target)) {
           const index = captures.length;
           captures.push(capture);
-          const { notes, says } = analysePage(capture, index);
+          const { notes, says } = analysePage(capture, index, seenRules);
           emit({ type: 'page', index, capture, notes, says });
         }
 

@@ -188,15 +188,25 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     const la = lum(a), lb = lum(b);
     return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
   };
+  // Walk up for the first opaque backdrop. If anything on the way paints an
+  // image or a gradient, the real backdrop is unknowable from computed style
+  // and the pair is skipped rather than guessed at.
   const behind = (el) => {
     let node = el;
     while (node && node !== document.documentElement) {
-      const c = rgb(getComputedStyle(node).backgroundColor);
+      const s = getComputedStyle(node);
+      if (s.backgroundImage && s.backgroundImage !== 'none') return null;
+      const c = rgb(s.backgroundColor);
       if (c && c.a > 0.85) return c;
       node = node.parentElement;
     }
     const c = rgb(getComputedStyle(document.body).backgroundColor);
     return c && c.a > 0.85 ? c : { r: 255, g: 255, b: 255, a: 1 };
+  };
+  // Saturation, to tell a real colour from a grey.
+  const sat = (c) => {
+    const mx = Math.max(c.r, c.g, c.b), mn = Math.min(c.r, c.g, c.b);
+    return mx === 0 ? 0 : (mx - mn) / mx;
   };
 
   const fields = [...document.querySelectorAll('input, select, textarea')].filter(
@@ -242,12 +252,15 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     const fg = rgb(s.color);
     if (!fg || fg.a < 0.5) continue;
     const bg = behind(el);
+    if (!bg) continue;
     const size = parseFloat(s.fontSize);
     const bold = parseInt(s.fontWeight, 10) >= 700;
     const large = size >= 24 || (size >= 18.66 && bold);
     const floor = large ? 3 : 4.5;
     const r = ratio(fg, bg);
-    if (r < floor) {
+    // Exactly 1 means the two colours resolved identical, which in practice
+    // means the detection failed rather than the text being invisible.
+    if (r > 1.15 && r < floor) {
       misses.push({
         ratio: +r.toFixed(2),
         sample: el.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60),
@@ -269,7 +282,10 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
   let outlier = null;
   if (ranked.length > 2 && ranked[0][1].count >= 3) {
     const rare = ranked[ranked.length - 1];
-    if (rare[1].count === 1) {
+    const rareRgb = rgb('rgb(' + rare[0] + ')');
+    // Only a genuinely chromatic one off counts. A dark button among light
+    // ones is a contrast decision, not a palette slip.
+    if (rare[1].count === 1 && rareRgb && sat(rareRgb) > 0.18) {
       outlier = {
         colour: 'rgb(' + rare[0] + ')',
         dominant: 'rgb(' + ranked[0][0] + ')',

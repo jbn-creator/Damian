@@ -246,8 +246,31 @@ export interface PageNotes {
   says: string[];
 }
 
-/** Turn one captured page into notes anchored on it, and lines to say. */
-export function analysePage(capture: PageCapture, pageIndex: number): PageNotes {
+/** Second and later times Damian meets the same problem, he says less. */
+const REPEAT_LINE: Record<string, string> = {
+  fields: 'Same long form here.',
+  'no-h1': 'No h1 on this one either.',
+  headline: 'Headline here has the same problem. Still no figure in it.',
+  align: 'Title is off the same edge here too.',
+  contrast: 'More text below the contrast floor on this page.',
+  colour: 'Another control off the palette here.',
+  fonts: 'Same spread of typefaces on this page.',
+  targets: 'The small controls carry over to this page.',
+  alt: 'More images without alt text here.',
+  structure: 'Structure holds up on this one as well.',
+};
+
+/**
+ * Turn one captured page into notes anchored on it, and lines to say.
+ *
+ * `seenRules` carries across the walk so a rule that fires on all five pages
+ * is stated once and then acknowledged, rather than read out five times.
+ */
+export function analysePage(
+  capture: PageCapture,
+  pageIndex: number,
+  seenRules: Set<string> = new Set(),
+): PageNotes {
   const drafts = draftsFor(capture.audit).filter((draft) => anchored(draft.box));
 
   /* Two rules can land on the same element, and stacked notes hide each other. */
@@ -274,7 +297,13 @@ export function analysePage(capture: PageCapture, pageIndex: number): PageNotes 
     notes.push(note);
   });
 
-  return { notes, says: drafts.map((draft) => draft.note) };
+  const says = drafts.map((draft) => {
+    if (seenRules.has(draft.id)) return REPEAT_LINE[draft.id] ?? draft.note;
+    seenRules.add(draft.id);
+    return draft.note;
+  });
+
+  return { notes, says };
 }
 
 /** Everything Damian found, once the whole walk is done. */
