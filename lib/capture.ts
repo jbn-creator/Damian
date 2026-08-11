@@ -89,6 +89,17 @@ export type CrawlEvent =
   | { type: 'move'; label: string; clicked: boolean }
   | { type: 'plan'; pages: string[] };
 
+/**
+ * Called when a page has been captured, and awaited before the walk moves on.
+ *
+ * This is the backpressure. The walk is a producer, so without something to
+ * wait on it would race ahead and be three pages away by the time the first
+ * note is on screen.
+ */
+export interface CrawlHooks {
+  onPage: (capture: PageCapture, index: number) => Promise<void>;
+}
+
 export interface PageCapture {
   url: string;
   /** Short label for the page switcher, such as "/solutions". */
@@ -813,7 +824,10 @@ const labelFor = (url: URL) => {
  * happening rather than waiting for the whole thing. One browser for the whole
  * trip, because booting Chrome is most of the cost.
  */
-export async function* crawl(rawUrl: string): AsyncGenerator<CrawlEvent> {
+export async function* crawl(
+  rawUrl: string,
+  hooks: CrawlHooks,
+): AsyncGenerator<CrawlEvent> {
   const entry = assertPublicHttpUrl(rawUrl);
 
   /*
@@ -859,16 +873,21 @@ export async function* crawl(rawUrl: string): AsyncGenerator<CrawlEvent> {
       });
 
       await session.goto(entry.href);
-      push({ type: 'page', capture: await capturePage(entry.href, labelFor(entry)) });
 
-      /* Read the page the way a visitor would before moving on. */
+      /*
+       * Look around first, then stop and think. The scroll is the looking, and
+       * the hook is the thinking, which holds the walk until every note on this
+       * page has been read.
+       */
       await session.scrollThrough();
+      await hooks.onPage(await capturePage(entry.href, labelFor(entry)), 0);
 
       const links = await session.evaluate<{ url: string; label: string; reachable: boolean }[]>(
         LINKS_SCRIPT,
       );
       const route = links.slice(0, MAX_PAGES - 1);
       push({ type: 'plan', pages: route.map((link) => link.label) });
+      let visited = 1;
 
       for (const link of route) {
         try {
@@ -881,8 +900,9 @@ export async function* crawl(rawUrl: string): AsyncGenerator<CrawlEvent> {
           push({ type: 'move', label: link.label, clicked });
           if (!clicked) await session.goto(link.url);
 
-          push({ type: 'page', capture: await capturePage(link.url, link.label) });
           await session.scrollThrough();
+          await hooks.onPage(await capturePage(link.url, link.label), visited);
+          visited += 1;
         } catch {
           /* One bad page does not end the walk. */
         }

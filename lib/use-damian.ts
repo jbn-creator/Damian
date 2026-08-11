@@ -93,6 +93,8 @@ export function useDamian(): DamianRun {
   const [ideas, setIdeas] = useState<ProductIdea[]>(NO_IDEAS);
   const [metrics, setMetrics] = useState<ScorecardMetric[]>(NO_METRICS);
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
+  /* True while he is moving between pages, false while a page is being read. */
+  const [showLive, setShowLive] = useState(false);
   const [mode, setMode] = useState<RunMode>('demo');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
 
@@ -157,44 +159,22 @@ export function useDamian(): DamianRun {
     [],
   );
 
-  /** Show a page, then place its notes one at a time. */
+  /*
+   * Land on a page and show it. The notes are not scheduled here: the server
+   * reveals them one at a time and holds the browser still between each, so
+   * the pace of the walk is the pace of reading it.
+   */
   const stage = useCallback(
-    (page: CapturedPage, index: number, says: string[], ticket: number) => {
-      const arrival = Math.max(beat.current, Date.now());
-
-      timers.current.push(
-        setTimeout(
-          () => {
-            if (ticket !== attempt.current) return;
-            setPages((current) => {
-              if (current.some((existing) => existing.url === page.url)) return current;
-              return [...current, page];
-            });
-            /* The canvas follows the walk while it is still running. */
-            setActivePage(index);
-          },
-          Math.max(0, arrival - Date.now()),
-        ),
-      );
-      beat.current = arrival + NOTE_BEAT;
-
-      say(`Opened ${page.label}. Reading it.`, 'info', ticket);
-
-      page.notes.forEach((note, order) => {
-        const line = says[order] ?? note.title;
-        const at = say(line, note.type === 'opportunity' ? 'insight' : 'action', ticket);
-        timers.current.push(
-          setTimeout(
-            () => {
-              if (ticket !== attempt.current) return;
-              setRevealed((current) =>
-                current.includes(note.id) ? current : [...current, note.id],
-              );
-            },
-            Math.max(0, at - Date.now()),
-          ),
-        );
+    (page: CapturedPage, index: number, ticket: number) => {
+      if (ticket !== attempt.current) return;
+      setPages((current) => {
+        if (current.some((existing) => existing.url === page.url)) return current;
+        return [...current, page];
       });
+      setActivePage(index);
+      /* Stop watching the browser: this page is what is being read now. */
+      setShowLive(false);
+      say(`Opened ${page.label}. Reading it.`, 'info', ticket);
     },
     [say],
   );
@@ -209,7 +189,21 @@ export function useDamian(): DamianRun {
         notes: AUDIT_PINS.map((pin) => ({ ...pin, page: 0, note: pin.description })),
       };
       setState('scanning');
-      stage(page, 0, page.notes.map((note) => note.note ?? note.title), ticket);
+      stage(page, 0, ticket);
+      page.notes.forEach((note) => {
+        const at = say(note.note ?? note.title, 'action', ticket);
+        timers.current.push(
+          setTimeout(
+            () => {
+              if (ticket !== attempt.current) return;
+              setRevealed((current) =>
+                current.includes(note.id) ? current : [...current, note.id],
+              );
+            },
+            Math.max(0, at - Date.now()),
+          ),
+        );
+      });
       const finish = beat.current + NOTE_BEAT;
       timers.current.push(
         setTimeout(
@@ -246,6 +240,7 @@ export function useDamian(): DamianRun {
     setMetrics(NO_METRICS);
     setFallbackReason(null);
     setLiveFrame(null);
+    setShowLive(true);
     setState('launching');
     startedAt.current = Date.now();
     beat.current = Date.now();
@@ -326,6 +321,17 @@ export function useDamian(): DamianRun {
             continue;
           }
 
+          /* One note, revealed when the server says it has been put up. */
+          if (event.type === 'reveal') {
+            const noteId = event.noteId as unknown as string;
+            const line = event.says as unknown as string;
+            setRevealed((current) =>
+              current.includes(noteId) ? current : [...current, noteId],
+            );
+            say(line, 'action', ticket);
+            continue;
+          }
+
           if (event.type === 'plan') {
             const pages = event.pages as unknown as string[];
             say(
@@ -340,6 +346,8 @@ export function useDamian(): DamianRun {
 
           if (event.type === 'move') {
             const label = event.label as unknown as string;
+            /* Back to watching the browser while he travels. */
+            setShowLive(true);
             say(
               (event.clicked as unknown as boolean)
                 ? `Clicking through to ${label}.`
@@ -365,7 +373,6 @@ export function useDamian(): DamianRun {
                 notes: event.notes as unknown as AuditPin[],
               },
               event.index as unknown as number,
-              event.says as unknown as string[],
               ticket,
             );
             if (ticket === attempt.current) setState('analyzing');
@@ -436,7 +443,7 @@ export function useDamian(): DamianRun {
     isRunning,
     hasCompleted,
     mode,
-    liveFrame,
+    liveFrame: showLive ? liveFrame : null,
     fallbackReason,
     pages,
     activePage,

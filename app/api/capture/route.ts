@@ -4,7 +4,28 @@ import { analysePage, summarise } from '@/lib/findings';
 /* Chrome is spawned per request, so this cannot run on the edge. */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 300;
+
+/**
+ * Average silent reading speed, in words per second.
+ *
+ * 238 words per minute is where the reading research settles, and 238 / 60 is
+ * where this number comes from. A note stays up for as long as it takes to
+ * read it, so the walk moves at the pace of whoever is watching rather than at
+ * the pace of the browser.
+ */
+const WORDS_PER_SECOND = 3.96666666667;
+
+/** Long enough to register, short enough not to stall on a three word note. */
+const MIN_DWELL = 1400;
+const MAX_DWELL = 11000;
+
+const dwellFor = (text: string) => {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(MAX_DWELL, Math.max(MIN_DWELL, (words / WORDS_PER_SECOND) * 1000));
+};
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * The walk, streamed.
@@ -47,8 +68,28 @@ export async function POST(request: Request) {
       /* Carried across pages so a repeated finding is not read out five times. */
       const seenRules = new Set<string>();
 
+      /*
+       * Held here rather than on the client, because it has to hold the walk
+       * as well. A note goes up, the browser stops where it is, and nothing
+       * else happens until there has been time to read it.
+       */
+      const readPage = async (capture: PageCapture, index: number) => {
+        captures.push(capture);
+        const { notes, says } = analysePage(capture, index, seenRules);
+        emit({ type: 'page', index, capture, notes, says });
+
+        for (let order = 0; order < notes.length; order += 1) {
+          const note = notes[order];
+          const line = says[order] ?? note.note ?? note.title;
+          emit({ type: 'reveal', pageIndex: index, noteId: note.id, says: line });
+          await wait(dwellFor(line));
+        }
+
+        if (notes.length === 0) await wait(MIN_DWELL);
+      };
+
       try {
-        for await (const event of crawl(target)) {
+        for await (const event of crawl(target, { onPage: readPage })) {
           /* Frames are the live view. They pass straight through. */
           if (event.type === 'frame') {
             emit({ type: 'frame', frame: event.frame });
@@ -64,12 +105,6 @@ export async function POST(request: Request) {
             emit({ type: 'move', label: event.label, clicked: event.clicked });
             continue;
           }
-
-          const capture = event.capture;
-          const index = captures.length;
-          captures.push(capture);
-          const { notes, says } = analysePage(capture, index, seenRules);
-          emit({ type: 'page', index, capture, notes, says });
         }
 
         if (captures.length === 0) {
