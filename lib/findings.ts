@@ -273,7 +273,11 @@ export function analysePage(
 ): PageNotes {
   const drafts = draftsFor(capture.audit).filter((draft) => anchored(draft.box));
 
-  /* Two rules can land on the same element, and stacked notes hide each other. */
+  /*
+   * Two rules can land on the same element, and that is correct: both frames
+   * outline the thing they are about. Keeping the cards off each other is the
+   * overlay's job, not this one's.
+   */
   const notes: AuditPin[] = [];
   drafts.forEach((draft) => {
     const box = draft.box as Rect;
@@ -291,9 +295,6 @@ export function analysePage(
       note: draft.note,
       page: pageIndex,
     };
-    while (notes.some((other) => Math.hypot(other.x - note.x, other.y - note.y) < 4)) {
-      note.y = clamp(note.y + 5, 3, 96);
-    }
     notes.push(note);
   });
 
