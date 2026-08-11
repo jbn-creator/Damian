@@ -24,6 +24,8 @@ interface AgentCanvasProps {
   pages: CapturedPage[];
   activePage: number;
   onSelectPage: (index: number) => void;
+  /** What Damian is looking at right now, while he is still walking. */
+  liveFrame: string | null;
 }
 
 const ZOOM_STEPS = [1, 1.25, 1.5, 1.75, 2] as const;
@@ -41,7 +43,7 @@ const clamp = (value: number, min: number, max: number) =>
  */
 export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
   function AgentCanvas(
-    { url, state, notes, isRunning, pages, activePage, onSelectPage },
+    { url, state, notes, isRunning, pages, activePage, onSelectPage, liveFrame },
     ref,
   ) {
     const page = pages[activePage] ?? null;
@@ -244,7 +246,11 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                     className="relative origin-center transition-transform duration-500 ease-instrument"
                     style={{ transform: `scale(${zoom})` }}
                   >
-                    <CapturedSurface src={screenshot} />
+                    {/*
+                      While he is walking you watch him. The still capture only
+                      takes over once he has stopped and the notes are on it.
+                    */}
+                    <CapturedSurface src={liveFrame ?? screenshot} />
                     <NoteOverlay
                       notes={pins}
                       zoom={zoom}

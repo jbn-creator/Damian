@@ -44,6 +44,8 @@ export interface DamianRun {
   hasCompleted: boolean;
 
   mode: RunMode;
+  /** The live view while Damian is walking. Null once he stops. */
+  liveFrame: string | null;
   /** Why the run fell back to the scripted demo, if it did. */
   fallbackReason: string | null;
 
@@ -90,6 +92,7 @@ export function useDamian(): DamianRun {
   const [revealed, setRevealed] = useState<string[]>([]);
   const [ideas, setIdeas] = useState<ProductIdea[]>(NO_IDEAS);
   const [metrics, setMetrics] = useState<ScorecardMetric[]>(NO_METRICS);
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
   const [mode, setMode] = useState<RunMode>('demo');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
 
@@ -118,6 +121,7 @@ export function useDamian(): DamianRun {
     setIdeas(NO_IDEAS);
     setMetrics(NO_METRICS);
     setFallbackReason(null);
+    setLiveFrame(null);
   }, [clearSchedule]);
 
   /** Queue a line for Damian to say, in order, on the shared beat. */
@@ -241,6 +245,7 @@ export function useDamian(): DamianRun {
     setIdeas(NO_IDEAS);
     setMetrics(NO_METRICS);
     setFallbackReason(null);
+    setLiveFrame(null);
     setState('launching');
     startedAt.current = Date.now();
     beat.current = Date.now();
@@ -312,6 +317,39 @@ export function useDamian(): DamianRun {
             continue;
           }
 
+          /*
+           * The live view. Rendered straight through rather than queued behind
+           * the note beat, because the whole point is that it is live.
+           */
+          if (event.type === 'frame') {
+            setLiveFrame(`data:image/jpeg;base64,${event.frame as unknown as string}`);
+            continue;
+          }
+
+          if (event.type === 'plan') {
+            const pages = event.pages as unknown as string[];
+            say(
+              pages.length
+                ? `Found ${pages.length} more pages worth a look: ${pages.join(', ')}.`
+                : 'No other pages worth walking from here.',
+              'info',
+              ticket,
+            );
+            continue;
+          }
+
+          if (event.type === 'move') {
+            const label = event.label as unknown as string;
+            say(
+              (event.clicked as unknown as boolean)
+                ? `Clicking through to ${label}.`
+                : `Nothing clickable for ${label}. Going straight there.`,
+              'action',
+              ticket,
+            );
+            continue;
+          }
+
           if (event.type === 'page') {
             sawPage = true;
             const capture = event.capture as unknown as {
@@ -334,6 +372,7 @@ export function useDamian(): DamianRun {
           }
 
           if (event.type === 'done') {
+            setLiveFrame(null);
             const finish = beat.current + NOTE_BEAT;
             const nextIdeas = event.ideas as unknown as ProductIdea[];
             const nextMetrics = event.metrics as unknown as ScorecardMetric[];
@@ -397,6 +436,7 @@ export function useDamian(): DamianRun {
     isRunning,
     hasCompleted,
     mode,
+    liveFrame,
     fallbackReason,
     pages,
     activePage,

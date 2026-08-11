@@ -82,6 +82,13 @@ export interface DomAudit {
   colourOutlier: ColourOutlier | null;
 }
 
+/** What the walk emits: live frames as they paint, pages as they finish. */
+export type CrawlEvent =
+  | { type: 'frame'; frame: string }
+  | { type: 'page'; capture: PageCapture }
+  | { type: 'move'; label: string; clicked: boolean }
+  | { type: 'plan'; pages: string[] };
+
 export interface PageCapture {
   url: string;
   /** Short label for the page switcher, such as "/solutions". */
@@ -89,6 +96,9 @@ export interface PageCapture {
   screenshot: string;
   audit: DomAudit;
 }
+
+/** Our own cursor, which must never be audited as part of the page. */
+const CURSOR_ID = '__damian_cursor';
 
 const VIEWPORT_WIDTH = 1440;
 const VIEWPORT_HEIGHT = 900;
@@ -149,6 +159,7 @@ export function assertPublicHttpUrl(raw: string): URL {
  * arithmetic, so none of it needs a model.
  */
 const AUDIT_SCRIPT = `JSON.stringify((() => {
+  const OURS = (el) => el && el.id === '${CURSOR_ID}';
   const W = innerWidth;
   const H = innerHeight;
   const pct = (el) => {
@@ -161,6 +172,7 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     };
   };
   const seen = (el) => {
+    if (OURS(el)) return false;
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
     return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' &&
@@ -369,10 +381,12 @@ const LINKS_SCRIPT = `JSON.stringify((() => {
   const here = location.origin;
   const seenPaths = new Set([location.pathname.replace(/\\/$/, '')]);
   const out = [];
-  const scopes = [...document.querySelectorAll('nav, header')];
-  const pool = scopes.length
-    ? scopes.flatMap((s) => [...s.querySelectorAll('a[href]')])
-    : [...document.querySelectorAll('a[href]')];
+  /*
+   * The whole document, not just the nav. A header's links are often inside
+   * hover panels with no box to press, while the footer carries pricing,
+   * contact and product as plain links a visitor can actually reach.
+   */
+  const pool = [...document.querySelectorAll('a[href]')];
   for (const a of pool) {
     let u;
     try { u = new URL(a.href, location.href); } catch { continue; }
@@ -382,21 +396,87 @@ const LINKS_SCRIPT = `JSON.stringify((() => {
     if (!path || seenPaths.has(path)) continue;
     if (/\\.(pdf|zip|png|jpe?g|svg|mp4|dmg|exe)$/i.test(path)) continue;
     seenPaths.add(path);
-    out.push({ url: u.origin + u.pathname, label: path });
-    if (out.length >= 12) break;
+    // A link inside a closed dropdown is in the DOM but has no box, so there
+    // is nothing on screen to press. Those go last, behind the ones a visitor
+    // could actually reach.
+    const box = [...a.getClientRects()].some((r) => r.width >= 1 && r.height >= 1);
+    out.push({ url: u.origin + u.pathname, label: path, reachable: box });
+    if (out.length >= 18) break;
   }
-  return out;
+  return out.sort((a, b) => Number(b.reachable) - Number(a.reachable));
 })())`;
+
+/**
+ * Injected into every page before its own script runs.
+ *
+ * The cursor is driven by real DOM mouse events, so moving it is just a matter
+ * of dispatching input. It also earns its keep twice over: the screencast is
+ * repaint driven, and a still page emits no frames at all, so an animating
+ * cursor is what keeps the live view from looking frozen.
+ *
+ * The target and window.open overrides keep every click inside the one page we
+ * are attached to. A link opening a new tab would otherwise look like a click
+ * that did nothing, and hang the walk.
+ */
+const PAGE_PRELUDE = `
+(() => {
+  window.open = (u) => { if (u) location.href = u; return null; };
+
+  const strip = () => document.querySelectorAll('a[target]').forEach((a) => a.removeAttribute('target'));
+
+  const mount = () => {
+    if (document.getElementById('${CURSOR_ID}')) return;
+    const c = document.createElement('div');
+    c.id = '${CURSOR_ID}';
+    c.setAttribute('aria-hidden', 'true');
+    c.style.cssText = [
+      'position:fixed', 'z-index:2147483647', 'pointer-events:none',
+      'left:0', 'top:0', 'width:22px', 'height:22px', 'margin:-11px 0 0 -11px',
+      'border-radius:9999px', 'background:rgba(99,102,241,0.9)',
+      'box-shadow:0 0 0 2px rgba(255,255,255,0.9), 0 2px 10px rgba(0,0,0,0.45)',
+      'transition:width .12s ease, height .12s ease, background .12s ease',
+    ].join(';');
+    document.documentElement.appendChild(c);
+
+    addEventListener('mousemove', (e) => {
+      c.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)';
+    }, true);
+    addEventListener('mousedown', () => {
+      c.style.width = '14px'; c.style.height = '14px';
+      c.style.background = 'rgba(255,255,255,0.95)';
+    }, true);
+    addEventListener('mouseup', () => {
+      c.style.width = '22px'; c.style.height = '22px';
+      c.style.background = 'rgba(99,102,241,0.9)';
+    }, true);
+
+    new MutationObserver(strip).observe(document.documentElement, {
+      subtree: true, childList: true,
+    });
+    strip();
+  };
+
+  if (document.readyState === 'loading') {
+    addEventListener('DOMContentLoaded', mount);
+  } else {
+    mount();
+  }
+})();
+`;
 
 interface Session {
   send: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
   evaluate: <T>(expression: string) => Promise<T>;
   goto: (url: string) => Promise<void>;
+  /** Walk the cursor to a link and press it. False when there was nothing to press. */
+  clickLink: (url: string) => Promise<boolean>;
+  /** Drag the page down so the whole thing passes the camera. */
+  scrollThrough: () => Promise<void>;
   close: () => Promise<void>;
 }
 
 /** Boot one browser and keep it for the whole walk. */
-async function openSession(): Promise<Session> {
+async function openSession(onFrame?: (frame: string) => void): Promise<Session> {
   const binary = findChrome();
   if (!binary) throw new Error('NO_CHROME');
 
@@ -407,6 +487,7 @@ async function openSession(): Promise<Session> {
     binary,
     [
       '--headless=new',
+      `--window-size=${VIEWPORT_WIDTH},${VIEWPORT_HEIGHT}`,
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${profile}`,
       '--no-first-run',
@@ -424,6 +505,10 @@ async function openSession(): Promise<Session> {
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   let messageId = 0;
   let loaded = false;
+  let settled = false;
+  let currentUrl = '';
+  /* Where the cursor is, so the next move starts from where it stopped. */
+  let cursor = { x: VIEWPORT_WIDTH / 2, y: VIEWPORT_HEIGHT / 2 };
 
   const close = async () => {
     try {
@@ -484,10 +569,47 @@ async function openSession(): Promise<Session> {
         return;
       }
       if (data.method === 'Page.loadEventFired') loaded = true;
+
+      /*
+       * A single page app routes without ever firing load, so waiting on load
+       * alone hangs forever the moment a click replaces a navigate.
+       */
+      if (data.method === 'Page.frameNavigated' && !data.params.frame.parentId) {
+        settled = false;
+        currentUrl = data.params.frame.url;
+      }
+      if (data.method === 'Page.navigatedWithinDocument') {
+        currentUrl = data.params.url;
+        settled = true;
+      }
+      if (
+        data.method === 'Page.lifecycleEvent' &&
+        (data.params.name === 'networkIdle' || data.params.name === 'load')
+      ) {
+        settled = true;
+      }
+
+      if (data.method === 'Page.screencastFrame') {
+        /*
+         * Acked on the bare socket, never through send(). Each send registers
+         * a promise and a twenty second timer, and at fifteen frames a second
+         * that is hundreds of live timers doing nothing.
+         */
+        socket?.send(
+          JSON.stringify({
+            id: (messageId += 1),
+            method: 'Page.screencastFrameAck',
+            params: { sessionId: data.params.sessionId },
+          }),
+        );
+        onFrame?.(data.params.data as string);
+      }
     });
 
     await send('Page.enable');
     await send('Runtime.enable');
+    await send('Page.setLifecycleEventsEnabled', { enabled: true });
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_PRELUDE });
     await send('Emulation.setDeviceMetricsOverride', {
       width: VIEWPORT_WIDTH,
       height: VIEWPORT_HEIGHT,
@@ -505,18 +627,164 @@ async function openSession(): Promise<Session> {
       return JSON.parse(result.result?.value ?? '{}') as T;
     };
 
-    const goto = async (url: string) => {
-      loaded = false;
-      await send('Page.navigate', { url });
-      const deadline = Date.now() + 15000;
-      while (!loaded && Date.now() < deadline) {
+    /* Wait on whichever signal this page actually produces, then settle. */
+    const rest = async (budget = 15000) => {
+      const deadline = Date.now() + budget;
+      while (!loaded && !settled && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100));
       }
-      /* A short settle for the paint that follows load. */
       await new Promise((r) => setTimeout(r, 1100));
     };
 
-    return { send, evaluate, goto, close };
+    const goto = async (url: string) => {
+      loaded = false;
+      settled = false;
+      await send('Page.navigate', { url });
+      await rest();
+      currentUrl = url;
+    };
+
+    /* Move in steps, so a viewer sees the cursor travel rather than teleport. */
+    const moveTo = async (x: number, y: number, steps = 18) => {
+      const from = { ...cursor };
+      for (let step = 1; step <= steps; step += 1) {
+        const ratio = step / steps;
+        await send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x: from.x + (x - from.x) * ratio,
+          y: from.y + (y - from.y) * ratio,
+          button: 'none',
+          buttons: 0,
+        });
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      cursor = { x, y };
+    };
+
+    const clickLink = async (url: string) => {
+      /*
+       * Resolved immediately before the press. Lazy loaded content shifts the
+       * layout, and a rect measured a second ago points at the wrong thing.
+       */
+      const found = await evaluate<boolean>(
+        `JSON.stringify((() => {
+          const want = ${JSON.stringify(url)};
+          const trim = (v) => (v.endsWith('/') ? v.slice(0, -1) : v);
+          const el = [...document.querySelectorAll('a[href]')].find((a) => {
+            try { return trim(new URL(a.href, location.href).href) === trim(want); }
+            catch { return false; }
+          });
+          if (!el) return false;
+          /* Instant, because a smooth scroll means the rect moves under us. */
+          el.scrollIntoView({ block: 'center', behavior: 'instant' });
+          return true;
+        })())`,
+      );
+      if (!found) return false;
+      await new Promise((r) => setTimeout(r, 420));
+
+      const spot = await evaluate<{ x: number; y: number } | null>(
+        `JSON.stringify((() => {
+          const want = ${JSON.stringify(url)};
+          // No regex here on purpose. A backslash inside a template literal is
+          // an escape, so a trailing slash pattern arrives at the page broken.
+          const trim = (v) => (v.endsWith('/') ? v.slice(0, -1) : v);
+          const el = [...document.querySelectorAll('a[href]')].find((a) => {
+            try { return trim(new URL(a.href, location.href).href) === trim(want); }
+            catch { return false; }
+          });
+          if (!el) return null;
+          const r = [...el.getClientRects()].find((b) => b.width >= 1 && b.height >= 1);
+          if (!r) return null;
+
+          /*
+           * Having a box is not the same as being pressable. A link inside a
+           * hover panel is laid out, on screen, and still loses the hit test to
+           * whatever is painted over it, so the press lands on a div and does
+           * nothing. Try a few points across the link and only report one that
+           * actually resolves to the link itself.
+           */
+          for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.5], [0.75, 0.5], [0.5, 0.25]]) {
+            const x = r.x + r.width * fx;
+            const y = r.y + r.height * fy;
+            if (x < 1 || y < 1 || x > innerWidth - 1 || y > innerHeight - 1) continue;
+            const hit = document.elementFromPoint(x, y);
+            if (hit && (hit === el || el.contains(hit) || hit.contains(el))) return { x, y };
+          }
+          return null;
+        })())`,
+      );
+      if (!spot) return false;
+
+      await new Promise((r) => setTimeout(r, 260));
+      await moveTo(spot.x, spot.y);
+
+      loaded = false;
+      settled = false;
+      const before = currentUrl;
+
+      await send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: spot.x,
+        y: spot.y,
+        button: 'left',
+        buttons: 1,
+        clickCount: 1,
+      });
+      await new Promise((r) => setTimeout(r, 90));
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: spot.x,
+        y: spot.y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      await rest(12000);
+      /* A click that moved nothing is a miss, not a navigation. */
+      return currentUrl !== before || loaded || settled;
+    };
+
+    const scrollThrough = async () => {
+      const height = await evaluate<{ page: number }>(
+        `JSON.stringify({ page: document.documentElement.scrollHeight })`,
+      );
+      const passes = Math.min(4, Math.floor(height.page / VIEWPORT_HEIGHT));
+      for (let pass = 0; pass < passes; pass += 1) {
+        try {
+          await send('Input.synthesizeScrollGesture', {
+            x: VIEWPORT_WIDTH / 2,
+            y: VIEWPORT_HEIGHT / 2,
+            xDistance: 0,
+            /* Negative scrolls the page down. The sign reads backwards. */
+            yDistance: -(VIEWPORT_HEIGHT - 120),
+            speed: 900,
+            preventFling: true,
+            gestureSourceType: 'mouse',
+          });
+        } catch {
+          /* The gesture is experimental. A wheel loop is the fallback. */
+          for (let tick = 0; tick < 14; tick += 1) {
+            await send('Input.dispatchMouseEvent', {
+              type: 'mouseWheel',
+              x: VIEWPORT_WIDTH / 2,
+              y: VIEWPORT_HEIGHT / 2,
+              deltaX: 0,
+              deltaY: 56,
+              button: 'none',
+              buttons: 0,
+            });
+            await new Promise((r) => setTimeout(r, 30));
+          }
+        }
+        await new Promise((r) => setTimeout(r, 220));
+      }
+      await evaluate(`JSON.stringify((window.scrollTo(0, 0), {}))`);
+      await new Promise((r) => setTimeout(r, 320));
+    };
+
+    return { send, evaluate, goto, clickLink, scrollThrough, close };
   } catch (error) {
     await close();
     throw error;
@@ -545,38 +813,102 @@ const labelFor = (url: URL) => {
  * happening rather than waiting for the whole thing. One browser for the whole
  * trip, because booting Chrome is most of the cost.
  */
-export async function* crawl(rawUrl: string): AsyncGenerator<PageCapture> {
+export async function* crawl(rawUrl: string): AsyncGenerator<CrawlEvent> {
   const entry = assertPublicHttpUrl(rawUrl);
-  const session = await openSession();
+
+  /*
+   * Producer and consumer, deliberately.
+   *
+   * Frames arrive from the socket listener while the walk is awaiting a
+   * navigation or a scroll. If the generator only drained between steps, every
+   * frame painted during a ten second scroll would queue up and arrive in one
+   * burst afterwards, which is a slideshow rather than a live view.
+   */
+  const queue: CrawlEvent[] = [];
+  let wake: (() => void) | null = null;
+  let walked = false;
+  let failure: unknown = null;
+
+  /* Narrowing gets confused by the closure, so the waiter is read then cleared. */
+  const notify = () => {
+    const waiter = wake;
+    wake = null;
+    waiter?.();
+  };
+
+  const push = (event: CrawlEvent) => {
+    queue.push(event);
+    notify();
+  };
+
+  const session = await openSession((frame) => push({ type: 'frame', frame }));
+
+  const capturePage = async (url: string, label: string): Promise<PageCapture> => {
+    const audit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
+    return { url, label, screenshot: await shoot(session), audit: { ...audit, url } };
+  };
+
+  const walk = (async () => {
+    try {
+      await session.send('Page.startScreencast', {
+        format: 'jpeg',
+        quality: 55,
+        maxWidth: 900,
+        maxHeight: 563,
+        everyNthFrame: 2,
+      });
+
+      await session.goto(entry.href);
+      push({ type: 'page', capture: await capturePage(entry.href, labelFor(entry)) });
+
+      /* Read the page the way a visitor would before moving on. */
+      await session.scrollThrough();
+
+      const links = await session.evaluate<{ url: string; label: string; reachable: boolean }[]>(
+        LINKS_SCRIPT,
+      );
+      const route = links.slice(0, MAX_PAGES - 1);
+      push({ type: 'plan', pages: route.map((link) => link.label) });
+
+      for (const link of route) {
+        try {
+          /*
+           * Pressed, not navigated to. A viewer should see the cursor reach the
+           * link and the page change under it. Navigation is the safety net for
+           * when the link is not on screen to be pressed.
+           */
+          const clicked = await session.clickLink(link.url);
+          push({ type: 'move', label: link.label, clicked });
+          if (!clicked) await session.goto(link.url);
+
+          push({ type: 'page', capture: await capturePage(link.url, link.label) });
+          await session.scrollThrough();
+        } catch {
+          /* One bad page does not end the walk. */
+        }
+      }
+    } catch (error) {
+      failure = error;
+    } finally {
+      walked = true;
+      notify();
+    }
+  })();
 
   try {
-    await session.goto(entry.href);
-
-    const audit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
-    yield {
-      url: entry.href,
-      label: labelFor(entry),
-      screenshot: await shoot(session),
-      audit: { ...audit, url: entry.href },
-    };
-
-    const links = await session.evaluate<{ url: string; label: string }[]>(LINKS_SCRIPT);
-
-    for (const link of links.slice(0, MAX_PAGES - 1)) {
-      try {
-        await session.goto(link.url);
-        const pageAudit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
-        yield {
-          url: link.url,
-          label: link.label,
-          screenshot: await shoot(session),
-          audit: { ...pageAudit, url: link.url },
-        };
-      } catch {
-        /* One bad page does not end the walk. */
+    while (!walked || queue.length) {
+      if (queue.length) {
+        yield queue.shift() as CrawlEvent;
+        continue;
       }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
     }
+    await walk;
+    if (failure) throw failure;
   } finally {
+    await session.send('Page.stopScreencast').catch(() => undefined);
     await session.close();
   }
 }

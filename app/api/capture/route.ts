@@ -48,7 +48,24 @@ export async function POST(request: Request) {
       const seenRules = new Set<string>();
 
       try {
-        for await (const capture of crawl(target)) {
+        for await (const event of crawl(target)) {
+          /* Frames are the live view. They pass straight through. */
+          if (event.type === 'frame') {
+            emit({ type: 'frame', frame: event.frame });
+            continue;
+          }
+
+          if (event.type === 'plan') {
+            emit({ type: 'plan', pages: event.pages });
+            continue;
+          }
+
+          if (event.type === 'move') {
+            emit({ type: 'move', label: event.label, clicked: event.clicked });
+            continue;
+          }
+
+          const capture = event.capture;
           const index = captures.length;
           captures.push(capture);
           const { notes, says } = analysePage(capture, index, seenRules);

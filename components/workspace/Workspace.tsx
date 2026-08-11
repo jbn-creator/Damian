@@ -217,6 +217,7 @@ export function Workspace() {
               pages={damian.pages}
               activePage={damian.activePage}
               onSelectPage={damian.setActivePage}
+              liveFrame={damian.liveFrame}
             />
             <CommandCenter
               ref={asideRef}
