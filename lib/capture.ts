@@ -72,6 +72,8 @@ export interface DomAudit {
   tinyTapBox: Rect | null;
   headingCount: number;
   landmarkCount: number;
+  /** Set when the page served is a bot check rather than the product. */
+  wall: { kind: string; evidence: string } | null;
   structureBox: Rect | null;
   fontFamilies: string[];
   fontBox: Rect | null;
@@ -294,9 +296,49 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     }
   }
 
+  /*
+   * Is this the product, or a gate in front of it?
+   *
+   * Auditing an interstitial and reporting it as the site is worse than
+   * reporting nothing, so this is checked before anything is claimed. It only
+   * detects and names the wall. Nothing here tries to get around one.
+   */
+  const wall = (() => {
+    const title = (document.title || '').toLowerCase();
+    const text = (document.body.innerText || '').slice(0, 4000).toLowerCase();
+    const has = (sel) => Boolean(document.querySelector(sel));
+
+    if (
+      title.includes('just a moment') ||
+      has('#challenge-running, #cf-challenge-running, .cf-browser-verification') ||
+      has('script[src*="challenges.cloudflare.com"]') ||
+      text.includes('performing security verification') ||
+      text.includes('checking your browser before accessing')
+    ) {
+      return { kind: 'Cloudflare', evidence: document.title || 'security verification page' };
+    }
+    if (has('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .g-recaptcha, .h-captcha')) {
+      return { kind: 'CAPTCHA', evidence: 'a captcha challenge is on the page' };
+    }
+    if (has('script[src*="perimeterx"], script[src*="px-cloud"]')) {
+      return { kind: 'PerimeterX', evidence: 'bot management script present' };
+    }
+    if (has('script[src*="datadome"]') || text.includes('blocked by datadome')) {
+      return { kind: 'DataDome', evidence: 'bot management script present' };
+    }
+    if (title.includes('access denied') || title.includes('attention required')) {
+      return { kind: 'Access denied', evidence: document.title };
+    }
+    if (text.includes('enable javascript and cookies to continue')) {
+      return { kind: 'Bot check', evidence: 'page asks to enable javascript and cookies' };
+    }
+    return null;
+  })();
+
   return {
     title: document.title || location.hostname,
     url: location.href,
+    wall,
     h1: h1Text ? h1Text.slice(0, 160) : null,
     h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,

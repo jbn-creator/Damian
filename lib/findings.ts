@@ -38,6 +38,12 @@ interface Draft {
 }
 
 function draftsFor(audit: DomAudit): Draft[] {
+  /*
+   * A gate is not the product. Critiquing an interstitial and presenting it as
+   * a finding about the site is a false claim, so no rule runs behind a wall.
+   */
+  if (audit.wall) return [];
+
   const drafts: Draft[] = [];
   const gate = audit.requiredCount || audit.fieldCount;
 
@@ -271,6 +277,16 @@ export function analysePage(
   pageIndex: number,
   seenRules: Set<string> = new Set(),
 ): PageNotes {
+  if (capture.audit.wall) {
+    const { kind, evidence } = capture.audit.wall;
+    return {
+      notes: [],
+      says: [
+        `${kind} is holding the door on ${capture.label}. I got ${evidence}, not the page, so I have nothing honest to say about this one.`,
+      ],
+    };
+  }
+
   const drafts = draftsFor(capture.audit).filter((draft) => anchored(draft.box));
 
   /*
@@ -312,7 +328,9 @@ export function summarise(captures: PageCapture[]): {
   ideas: ProductIdea[];
   metrics: ScorecardMetric[];
 } {
-  const audits = captures.map((capture) => capture.audit);
+  /* Scores are only over pages Damian actually saw. */
+  const audits = captures.map((capture) => capture.audit).filter((audit) => !audit.wall);
+  if (audits.length === 0) return { ideas: [], metrics: [] };
   const total = (pick: (audit: DomAudit) => number) =>
     audits.reduce((sum, audit) => sum + pick(audit), 0);
   const worst = (pick: (audit: DomAudit) => number) =>
