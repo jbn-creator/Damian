@@ -80,6 +80,20 @@ export interface DomAudit {
   worstContrast: ContrastMiss | null;
   contrastMisses: number;
   colourOutlier: ColourOutlier | null;
+  /** The spacing unit the page mostly follows, and what misses it. */
+  spacingBase: number | null;
+  spacingAdherence: number;
+  offGrid: { value: number; count: number }[];
+  offGridBox: Rect | null;
+  /** Distinct spacing values in play, and the commonest, when no grid holds. */
+  spacingSpread: number;
+  commonSpacings: number[];
+  /** Two type sizes close enough that having both is an accident. */
+  typeNearDupe: { a: number; b: number; box: Rect } | null;
+  /** Two colours close enough that they were meant to be one token. */
+  colourNearMiss: { a: string; b: string; box: Rect } | null;
+  /** Two elements in the same band that almost line up. */
+  alignNearMiss: { drift: number; box: Rect } | null;
 }
 
 /** What the walk emits: live frames as they paint, pages as they finish. */
@@ -196,11 +210,46 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
   const firstInFrame = (list) => list.find(inFrame) || null;
   const boxOf = (el) => (el && inFrame(el) ? pct(el) : null);
 
+  /*
+   * Colour parsing, via the canvas rather than a regex.
+   *
+   * getComputedStyle hands back whatever space the author wrote in, so a site
+   * using oklch or color(display-p3) returns strings an rgb pattern cannot
+   * read. Matching only rgb silently found no colours at all on those sites,
+   * which took the contrast check down with it. Canvas normalises anything the
+   * browser can parse, so this understands every syntax by definition.
+   */
+  const swatch = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const numbers = (text) => text.split(/[^0-9.]+/).filter(Boolean).map(Number);
   const rgb = (value) => {
-    const m = String(value).match(/rgba?\\(([^)]+)\\)/);
-    if (!m) return null;
-    const parts = m[1].split(',').map((n) => parseFloat(n));
-    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw || raw === 'transparent' || raw === 'none') return null;
+
+    if (raw.startsWith('rgb')) {
+      const parts = numbers(raw.slice(raw.indexOf('(') + 1));
+      if (parts.length >= 3) {
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+      }
+    }
+
+    /*
+     * Painted and read back, rather than parsed. Reading fillStyle back gives
+     * oklch() straight out again in current Chrome, and treating those three
+     * numbers as red, green and blue produced colours like rgb(0.32, 0.02,
+     * 233.8). One pixel of ground truth cannot be misread.
+     */
+    try {
+      swatch.fillStyle = '#000000';
+      swatch.fillStyle = raw;
+      swatch.clearRect(0, 0, 1, 1);
+      swatch.fillRect(0, 0, 1, 1);
+      const px = swatch.getImageData(0, 0, 1, 1).data;
+      return { r: px[0], g: px[1], b: px[2], a: px[3] / 255 };
+    } catch {
+      /* Unparseable, so it is not a colour we can reason about. */
+    }
+    return null;
   };
   const lum = (c) => {
     const f = (v) => {
@@ -228,6 +277,25 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     const c = rgb(getComputedStyle(document.body).backgroundColor);
     return c && c.a > 0.85 ? c : { r: 255, g: 255, b: 255, a: 1 };
   };
+  /*
+   * OKLab, for telling whether two colours were meant to be the same token.
+   * Euclidean distance here is calibrated against CIEDE2000 without any of its
+   * hue wraparound cases, and it is fifteen lines rather than sixty.
+   */
+  const oklab = (c) => {
+    const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const r = f(c.r), g = f(c.g), b = f(c.b);
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const t = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return {
+      L: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * t,
+      A: 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * t,
+      B: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * t,
+    };
+  };
+  const dEok = (a, b) => Math.hypot(a.L - b.L, a.A - b.A, a.B - b.B);
+
   // Saturation, to tell a real colour from a grey.
   const sat = (c) => {
     const mx = Math.max(c.r, c.g, c.b), mn = Math.min(c.r, c.g, c.b);
@@ -358,10 +426,152 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     return null;
   })();
 
+  /*
+   * Consistency, which is the part of visual design that can be measured.
+   *
+   * A design system is a finite token set, so "infer the intended scale and
+   * list what misses it" is always defensible. Two spacings 3px apart, two type
+   * sizes 1px apart, two greys a hair apart: each is one token that quietly
+   * became two, and none of it is a matter of taste.
+   */
+  /*
+   * Sampled over the whole document, not just the viewport. Whether a page
+   * keeps to a spacing grid is a property of the page, and measuring only what
+   * happens to be on screen left most pages with too few values to say
+   * anything. Anchoring still requires the element to be in frame, so a note
+   * always points at something visible.
+   */
+  const boxes = [...document.querySelectorAll('body *')]
+    .filter(seen)
+    .slice(0, 1200);
+
+  const SPACING_PROPS = ['marginTop', 'marginBottom', 'paddingTop', 'paddingBottom',
+                         'paddingLeft', 'paddingRight', 'rowGap', 'columnGap'];
+  const spacingTally = new Map();
+  for (const el of boxes) {
+    const cs = getComputedStyle(el);
+    for (const prop of SPACING_PROPS) {
+      const v = Math.round(parseFloat(cs[prop]) * 2) / 2;
+      if (!(v > 0) || v > 160) continue;
+      if (!spacingTally.has(v)) spacingTally.set(v, { count: 0, el });
+      spacingTally.get(v).count += 1;
+    }
+  }
+  const spacingTotal = [...spacingTally.values()].reduce((n, e) => n + e.count, 0);
+  const adherenceOf = (unit) => {
+    let hit = 0;
+    for (const [v, e] of spacingTally) {
+      const rem = v % unit;
+      if (Math.min(rem, unit - rem) < 0.51) hit += e.count;
+    }
+    return spacingTotal ? hit / spacingTotal : 0;
+  };
+  /* Largest unit that still holds, because 1 always scores a perfect one. */
+  /*
+   * Largest unit that still holds, because 1 scores a perfect one and 2 nearly
+   * always does. Below 4 there is no grid, only even numbers, so it is not
+   * worth telling anyone about.
+   */
+  const spacingBase = spacingTotal >= 25
+    ? [4, 5, 6, 8, 10, 12, 16].filter((u) => adherenceOf(u) >= 0.85).pop() ?? null
+    : null;
+  const spacingAdherence = spacingBase ? adherenceOf(spacingBase) : 0;
+  const offGridEntries = spacingBase
+    ? [...spacingTally.entries()]
+        .filter(([v]) => { const r = v % spacingBase; return Math.min(r, spacingBase - r) >= 0.51; })
+        .sort((a, b) => b[1].count - a[1].count)
+    : [];
+  const offGrid = offGridEntries.slice(0, 6).map(([value, e]) => ({ value, count: e.count }));
+  const offGridBox = offGridEntries
+    .map(([, e]) => boxOf(e.el))
+    .find((box) => box) ?? null;
+
+  const sizeTally = new Map();
+  for (const el of boxes) {
+    const chars = [...el.childNodes]
+      .filter((n) => n.nodeType === 3)
+      .reduce((n, t) => n + t.textContent.trim().length, 0);
+    if (chars < 3) continue;
+    const size = Math.round(parseFloat(getComputedStyle(el).fontSize) * 10) / 10;
+    if (!(size > 0)) continue;
+    if (!sizeTally.has(size)) sizeTally.set(size, { chars: 0, el });
+    sizeTally.get(size).chars += chars;
+  }
+  const usedSizes = [...sizeTally.entries()]
+    .filter(([, e]) => e.chars >= 25)
+    .sort((a, b) => a[0] - b[0]);
+  let typeNearDupe = null;
+  for (let i = 0; i < usedSizes.length - 1 && !typeNearDupe; i += 1) {
+    const a = usedSizes[i][0];
+    const b = usedSizes[i + 1][0];
+    if (b / a < 1.08 && b - a >= 0.5) {
+      const box = boxOf(usedSizes[i + 1][1].el) || boxOf(usedSizes[i][1].el);
+      if (box) typeNearDupe = { a, b, box };
+    }
+  }
+
+  const inkTally = new Map();
+  for (const el of boxes) {
+    const cs = getComputedStyle(el);
+    for (const value of [cs.color, cs.backgroundColor, cs.borderTopColor]) {
+      const c = rgb(value);
+      if (!c || c.a < 0.9) continue;
+      const key = c.r + ',' + c.g + ',' + c.b;
+      if (!inkTally.has(key)) inkTally.set(key, { count: 0, el, lab: oklab(c) });
+      inkTally.get(key).count += 1;
+    }
+  }
+  const inks = [...inkTally.entries()].filter(([, e]) => e.count >= 2);
+  let colourNearMiss = null;
+  for (let i = 0; i < inks.length && !colourNearMiss; i += 1) {
+    for (let j = i + 1; j < inks.length; j += 1) {
+      const d = dEok(inks[i][1].lab, inks[j][1].lab);
+      if (d > 0.0005 && d < 0.02) {
+        const box = boxOf(inks[j][1].el) || boxOf(inks[i][1].el);
+        if (box) {
+          colourNearMiss = { a: 'rgb(' + inks[i][0] + ')', b: 'rgb(' + inks[j][0] + ')', box };
+          break;
+        }
+      }
+    }
+  }
+
+  let alignNearMiss = null;
+  const banded = boxes
+    .map((el) => ({ el, r: el.getBoundingClientRect() }))
+    .filter((b) => b.r.width > 60 && b.r.height > 14 && inFrame(b.el))
+    .sort((x, y) => x.r.top - y.r.top);
+  /* Sorted by top edge, so a short window of neighbours is enough. */
+  for (let i = 0; i < banded.length && !alignNearMiss; i += 1) {
+    for (let j = i + 1; j < Math.min(i + 14, banded.length); j += 1) {
+      const a = banded[i].r, b = banded[j].r;
+      if (b.top > a.bottom) break;
+      const drift = Math.abs(a.left - b.left);
+      if (drift > 1.5 && drift < 12) {
+        const box = boxOf(banded[j].el);
+        if (box) { alignNearMiss = { drift: Math.round(drift * 10) / 10, box }; break; }
+      }
+    }
+  }
+
+  const commonSpacings = [...spacingTally.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 5)
+    .map(([value]) => value);
+
   return {
     title: document.title || location.hostname,
     url: location.href,
     wall,
+    spacingSpread: spacingTally.size,
+    commonSpacings,
+    spacingBase,
+    spacingAdherence: Math.round(spacingAdherence * 100) / 100,
+    offGrid,
+    offGridBox,
+    typeNearDupe,
+    colourNearMiss,
+    alignNearMiss,
     h1: h1Text ? h1Text.slice(0, 160) : null,
     h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,

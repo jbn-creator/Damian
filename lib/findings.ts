@@ -231,16 +231,118 @@ function draftsFor(audit: DomAudit): Draft[] {
     });
   }
 
-  if (audit.landmarkCount >= 3 && audit.headingCount >= 3 && anchored(audit.structureBox)) {
+  /*
+   * Consistency findings. Each one is a token that quietly became two, which
+   * is measurable rather than a matter of taste, and points at real pixels.
+   */
+  /* No grid at all is a stronger, and commoner, finding than a grid with strays. */
+  if (
+    !audit.spacingBase &&
+    audit.spacingSpread >= 14 &&
+    audit.commonSpacings.length > 0 &&
+    anchored(audit.offGridBox ?? audit.structureBox)
+  ) {
     drafts.push({
-      id: 'structure',
-      type: 'opportunity',
-      box: audit.structureBox,
-      note: `This part holds up. ${audit.headingCount} headings across ${audit.landmarkCount} landmarks, so the page can be navigated by structure rather than by guessing.`,
-      title: 'Structure is sound here',
-      description: `Damian counted ${audit.landmarkCount} landmark regions and ${audit.headingCount} headings. The outline is real, which is what lets assistive technology move through the page.`,
-      fix: 'Hold this. Give the next screen the same skeleton rather than a wall of divs.',
-      score: clamp(50 + audit.headingCount * 2),
+      id: 'no-grid',
+      type: 'friction',
+      box: audit.offGridBox ?? audit.structureBox,
+      note: `There is no spacing system here. ${audit.spacingSpread} different values in play, the commonest being ${audit.commonSpacings.slice(0, 4).join('px, ')}px. Nothing lines up because nothing agrees.`,
+      title: `${audit.spacingSpread} spacing values, no grid`,
+      description: `Damian tallied every rendered margin, padding and gap and tested them against a 4, 5, 6, 8, 10, 12 and 16 pixel step. None of them accounts for even 85 percent of the values, so this page is spaced by hand rather than by a scale. The commonest values are ${audit.commonSpacings.join('px, ')}px.`,
+      fix: 'Pick one step, usually 8px, and snap every value to a multiple of it. Rhythm is the cheapest polish there is.',
+      score: clamp(45 + audit.spacingSpread),
+      idea: {
+        id: 'idea-no-grid',
+        category: 'quick_win',
+        title: 'Put spacing on a single step',
+        description: 'Spacing does not follow any consistent unit, so vertical rhythm never settles.',
+        solution: 'Adopt one base step and express every margin, padding and gap as a multiple of it.',
+        impact: 'High',
+        effort: '1d',
+      },
+    });
+  }
+
+  if (audit.spacingBase && audit.offGrid.length > 0 && anchored(audit.offGridBox)) {
+    const worst = audit.offGrid[0];
+    const others = audit.offGrid.slice(1, 4).map((entry) => `${entry.value}px`);
+    drafts.push({
+      id: 'grid',
+      type: 'friction',
+      box: audit.offGridBox,
+      note: `Your spacing runs on a ${audit.spacingBase}px grid, ${Math.round(audit.spacingAdherence * 100)}% of the time. This one is ${worst.value}px${others.length ? `, and so are ${others.join(', ')}` : ''}.`,
+      title: `${worst.value}px breaks the ${audit.spacingBase}px grid`,
+      description: `Damian tallied every rendered margin, padding and gap on this page. ${Math.round(audit.spacingAdherence * 100)} percent are multiples of ${audit.spacingBase}px. The ones that are not: ${audit.offGrid.map((entry) => `${entry.value}px used ${entry.count} times`).join(', ')}.`,
+      fix: `Round these to the nearest multiple of ${audit.spacingBase}. Nothing else has to change.`,
+      score: clamp(40 + audit.offGrid.length * 6),
+      idea: {
+        id: 'idea-grid',
+        category: 'quick_win',
+        title: `Bring the off grid spacing onto ${audit.spacingBase}px`,
+        description: `Spacing is on a ${audit.spacingBase}px grid ${Math.round(audit.spacingAdherence * 100)} percent of the time, with a handful of values that miss it.`,
+        solution: 'Round the strays to the nearest step. It is a find and replace, not a redesign.',
+        impact: 'Medium',
+        effort: '2h',
+      },
+    });
+  }
+
+  if (audit.typeNearDupe && anchored(audit.typeNearDupe.box)) {
+    const { a, b } = audit.typeNearDupe;
+    drafts.push({
+      id: 'type-dupe',
+      type: 'warning',
+      box: audit.typeNearDupe.box,
+      note: `You are running ${a}px and ${b}px as separate sizes. Nobody can see ${Math.round((b - a) * 10) / 10}px of difference, so this is one size that became two.`,
+      title: `${a}px and ${b}px are the same size`,
+      description: `Both ${a}px and ${b}px carry real text on this page. A ${Math.round((b - a) * 10) / 10}px gap is below what anyone perceives as a step in hierarchy, so it reads as drift rather than intent.`,
+      fix: `Pick one and delete the other. If they are meant to differ, make the gap large enough to see.`,
+      score: 46,
+      idea: {
+        id: 'idea-type-dupe',
+        category: 'quick_win',
+        title: 'Collapse the duplicate type sizes',
+        description: 'Sizes are in use that sit too close together to read as separate steps.',
+        solution: 'Keep one value per step and let weight carry the rest of the hierarchy.',
+        impact: 'Medium',
+        effort: '2h',
+      },
+    });
+  }
+
+  if (audit.colourNearMiss && anchored(audit.colourNearMiss.box)) {
+    const { a, b } = audit.colourNearMiss;
+    drafts.push({
+      id: 'colour-dupe',
+      type: 'warning',
+      box: audit.colourNearMiss.box,
+      note: `${a} and ${b} are both in use here. They are indistinguishable, so that is one token somebody duplicated by hand.`,
+      title: 'Two colours that should be one',
+      description: `Damian grouped every colour on the page in OKLab. ${a} and ${b} sit close enough together that no one can tell them apart, yet both appear more than once. That is the signature of a value typed in twice rather than referenced.`,
+      fix: 'Keep one, point everything at it, and delete the other.',
+      score: 42,
+      idea: {
+        id: 'idea-colour-dupe',
+        category: 'quick_win',
+        title: 'Deduplicate the near identical colours',
+        description: 'Colours are in use that are visually identical but declared separately.',
+        solution: 'Collapse them to a single token and reference it everywhere.',
+        impact: 'Medium',
+        effort: '1h',
+      },
+    });
+  }
+
+  if (audit.alignNearMiss && anchored(audit.alignNearMiss.box)) {
+    drafts.push({
+      id: 'align-drift',
+      type: 'friction',
+      box: audit.alignNearMiss.box,
+      note: `This is ${audit.alignNearMiss.drift}px off the edge of the thing beside it. Not enough to look deliberate, just enough to look wrong.`,
+      title: `${audit.alignNearMiss.drift}px out of alignment`,
+      description: `Two elements sharing a horizontal band start ${audit.alignNearMiss.drift}px apart. Either they line up or they clearly do not, and a few pixels reads as a mistake to everyone without anyone being able to say why.`,
+      fix: 'Snap it to the same edge as its neighbour.',
+      score: 52,
     });
   }
 
@@ -263,7 +365,11 @@ const REPEAT_LINE: Record<string, string> = {
   fonts: 'Same spread of typefaces on this page.',
   targets: 'The small controls carry over to this page.',
   alt: 'More images without alt text here.',
-  structure: 'Structure holds up on this one as well.',
+  'no-grid': 'Spacing is unsystematic here too.',
+  grid: 'Same spacing strays on this page.',
+  'type-dupe': 'Those two type sizes again here.',
+  'colour-dupe': 'Another pair of near identical colours here.',
+  'align-drift': 'Something is off the edge here too.',
 };
 
 /**
