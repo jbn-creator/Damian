@@ -420,10 +420,16 @@ export function useDamian(): DamianRun {
   const visibleNotes = useMemo(() => {
     const page = pages[activePage];
     if (!page) return [];
-    /* Once the walk is done, every note on the page you are reading is shown. */
-    return hasCompleted
-      ? page.notes
-      : page.notes.filter((note) => revealed.includes(note.id));
+    /* Reading it back afterwards, everything on the page is on the page. */
+    if (hasCompleted) return page.notes;
+
+    /*
+     * Mid walk, only the note he is talking about right now. Leaving the
+     * earlier ones up meant a stale box hanging over a part of the page he had
+     * already moved on from, and nothing to say which one he meant.
+     */
+    const live = page.notes.filter((note) => revealed.includes(note.id));
+    return live.length ? [live[live.length - 1]] : [];
   }, [pages, activePage, revealed, hasCompleted]);
 
   /* Progress is pages walked, which is the only honest measure of the walk. */

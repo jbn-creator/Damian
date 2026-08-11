@@ -76,6 +76,12 @@ const config: Config = {
         glow: '0 0 0 1px rgba(99, 102, 241, 0.45), 0 8px 32px rgba(99, 102, 241, 0.22)',
         lift: '0 18px 48px rgba(8, 9, 12, 0.72)',
         panel: '0 24px 64px rgba(8, 9, 12, 0.86)',
+        /*
+         * The scrim Damian points with. An outward shadow large enough to cover
+         * the frame dims the whole page and leaves only the element it sits on
+         * cut out of the dimming, which is the cheapest possible spotlight.
+         */
+        spotlight: '0 0 0 9999px rgba(8, 9, 12, 0.66)',
       },
       transitionTimingFunction: {
         /* Custom curves. Nothing here is a default ease. */

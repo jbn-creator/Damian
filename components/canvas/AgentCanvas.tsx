@@ -260,6 +260,7 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                         setOpenPinId((current) => (current === noteId ? null : noteId))
                       }
                       registerNote={registerMarker}
+                      spotlit={isRunning}
                     />
                   </div>
 

@@ -12,28 +12,40 @@ interface NoteOverlayProps {
   openNoteId: string | null;
   onToggleNote: (noteId: string) => void;
   registerNote: (noteId: string, node: HTMLButtonElement | null) => void;
+  /**
+   * True while Damian is still walking. One note is up at a time and the page
+   * around it is dimmed, so there is no question what he is pointing at and no
+   * stale note left behind when he moves on.
+   */
+  spotlit: boolean;
 }
 
 /*
  * Outline only, never a fill. A tint over a full width heading washes out the
  * page Damian is annotating, which defeats the point of showing the real one.
  */
-const FRAME: Record<AuditPin['type'], string> = {
+const EDGE: Record<AuditPin['type'], string> = {
   friction: 'border-crimson',
   warning: 'border-amber',
   opportunity: 'border-emerald',
 };
 
 const CARD: Record<AuditPin['type'], string> = {
-  friction: 'border-crimson/45',
-  warning: 'border-amber/45',
-  opportunity: 'border-emerald/45',
+  friction: 'border-crimson/50',
+  warning: 'border-amber/50',
+  opportunity: 'border-emerald/50',
 };
 
 const FILL: Record<AuditPin['type'], string> = {
   friction: 'bg-crimson',
   warning: 'bg-amber',
   opportunity: 'bg-emerald',
+};
+
+const INK: Record<AuditPin['type'], string> = {
+  friction: 'text-crimson',
+  warning: 'text-amber',
+  opportunity: 'text-emerald',
 };
 
 const LABEL: Record<AuditPin['type'], string> = {
@@ -44,13 +56,17 @@ const LABEL: Record<AuditPin['type'], string> = {
 
 /*
  * Card footprint, as a share of the frame. The overlay works in percentages so
- * it holds at any container size, and these two numbers are what the layout
- * pass reasons about. They match the rendered card closely enough to keep
- * cards off each other and off the elements they describe.
+ * it holds at any container size, and these are what the layout pass reasons
+ * about.
  */
-const CARD_W = 23;
-const CARD_H = 15;
-const GAP = 1.5;
+const CARD_W = 24;
+/*
+ * The height the layout reserves. The card is clamped to four lines so it can
+ * never exceed this, because a card taller than its declared footprint passes
+ * the bounds check and then gets cut off by the frame it sits in.
+ */
+const CARD_H = 20;
+const GAP = 2.5;
 
 interface Placement {
   left: number;
@@ -66,10 +82,9 @@ const inBounds = (spot: Placement) =>
 /**
  * Where each card goes.
  *
- * Tried in order beside, then above, then below the element it describes, and
- * the first spot that is inside the frame and clear of every card already
- * placed wins. Without this two findings on the same element stack on top of
- * each other and neither can be read, and a card lands over its own subject.
+ * Tried beside, then above, then below the element it describes, and the first
+ * spot inside the frame and clear of every card already placed wins. Without
+ * this, two findings on one element stack and neither can be read.
  */
 function layout(notes: AuditPin[]): Placement[] {
   const placed: Placement[] = [];
@@ -106,15 +121,37 @@ function layout(notes: AuditPin[]): Placement[] {
   return placed;
 }
 
+/** Corner brackets, the way a camera frames what it has locked onto. */
+function Brackets({ tone, zoom }: { tone: AuditPin['type']; zoom: number }) {
+  const corners = [
+    { at: 'left-0 top-0 border-l-2 border-t-2 rounded-tl-md', origin: 'top left' },
+    { at: 'right-0 top-0 border-r-2 border-t-2 rounded-tr-md', origin: 'top right' },
+    { at: 'left-0 bottom-0 border-l-2 border-b-2 rounded-bl-md', origin: 'bottom left' },
+    { at: 'right-0 bottom-0 border-r-2 border-b-2 rounded-br-md', origin: 'bottom right' },
+  ];
+  return (
+    <>
+      {corners.map((corner) => (
+        <span
+          key={corner.origin}
+          aria-hidden="true"
+          className={`absolute h-3.5 w-3.5 ${corner.at} ${EDGE[tone]}`}
+          style={{ transform: `scale(${1 / zoom})`, transformOrigin: corner.origin }}
+        />
+      ))}
+    </>
+  );
+}
+
 /**
  * Damian's notes, on the page they are about.
  *
- * Each one frames the element it concerns and says what it thinks in about
- * three lines, with a matching number tying the card to its frame.
+ * While he is walking, one note is up at a time and everything except the
+ * element it concerns is dimmed, so there is no ambiguity about what he means
+ * and nothing stale left behind when he moves on. Once he stops, every note on
+ * the page you are reading is shown at once and the dimming lifts.
  *
  * GSAP owns the arrival, as it owns every orchestrated timeline in the app.
- * Notes render from the opacity-0 class so nothing flashes before it takes
- * over, and its inline styles then outrank the class.
  */
 export function NoteOverlay({
   notes,
@@ -123,6 +160,7 @@ export function NoteOverlay({
   openNoteId,
   onToggleNote,
   registerNote,
+  spotlit,
 }: NoteOverlayProps) {
   const anchors = useRef(new Map<string, HTMLLIElement>());
   const landed = useRef(new Set<string>());
@@ -194,10 +232,16 @@ export function NoteOverlay({
             }}
             className="absolute inset-0 opacity-0"
           >
-            {/* The frame around what the note is about. */}
+            {/*
+              The element under discussion, framed. When spotlit, the scrim is
+              an outward box shadow on this same rectangle, so the whole page
+              dims and only this stays cut out of the dimming.
+            */}
             <span
               aria-hidden="true"
-              className={`absolute rounded-xl border-2 ${FRAME[note.type]}`}
+              className={`absolute transition-shadow duration-500 ease-instrument ${
+                spotlit ? 'shadow-spotlight' : ''
+              }`}
               style={{
                 left: `${note.x - width / 2}%`,
                 top: `${note.y - height / 2}%`,
@@ -205,6 +249,7 @@ export function NoteOverlay({
                 height: `${height}%`,
               }}
             >
+              <Brackets tone={note.type} zoom={zoom} />
               <span
                 className={`absolute left-0 top-0 grid h-4 w-4 place-items-center rounded-full ${FILL[note.type]} font-body text-[0.5rem] font-bold text-void`}
                 style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
@@ -219,7 +264,7 @@ export function NoteOverlay({
               readable while the page under it grows.
             */}
             <span
-              className="absolute block"
+              className="absolute z-10 block"
               style={{
                 left: `${spot.left}%`,
                 top: `${spot.top}%`,
@@ -237,23 +282,34 @@ export function NoteOverlay({
                   event.stopPropagation();
                   onToggleNote(note.id);
                 }}
-                className={`pointer-events-auto block w-full cursor-pointer rounded-2xl border ${CARD[note.type]} bg-void/85 p-3 text-left shadow-panel backdrop-blur-md transition-colors duration-200 ease-instrument hover:bg-void ${
+                className={`pointer-events-auto block w-full cursor-pointer overflow-hidden rounded-2xl border ${CARD[note.type]} bg-void/85 text-left shadow-panel backdrop-blur-xl transition-colors duration-200 ease-instrument hover:bg-void ${
                   isOpen ? 'ring-2 ring-chalk ring-offset-2 ring-offset-void' : ''
                 }`}
               >
-                <span className="flex items-center gap-2">
+                {/* Readout strip: what kind of finding, where, and its weight. */}
+                <span className="flex items-center gap-2 border-b border-hairline px-3 py-2">
                   <span
                     aria-hidden="true"
-                    className={`grid h-4 w-4 shrink-0 place-items-center rounded-full ${FILL[note.type]} font-body text-[0.5rem] font-bold text-void`}
-                  >
-                    {index + 1}
-                  </span>
-                  <span className="text-micro font-bold uppercase text-silver">
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${FILL[note.type]} animate-breathe`}
+                  />
+                  <span className={`text-micro font-bold uppercase ${INK[note.type]}`}>
                     {LABEL[note.type]}
+                  </span>
+                  <span
+                    data-numeric
+                    className="ml-auto font-mono text-[0.5625rem] leading-none text-silver"
+                  >
+                    {`${Math.round(note.x)}.${Math.round(note.y)}`}
+                  </span>
+                  <span
+                    data-numeric
+                    className={`font-display text-tiny font-bold leading-none ${INK[note.type]}`}
+                  >
+                    {note.impactScore}
                   </span>
                 </span>
 
-                <span className="mt-2 block text-pretty text-tiny leading-[1.55] text-chalk">
+                <span className="line-clamp-4 block px-3 py-2.5 text-pretty text-tiny leading-[1.5] text-chalk">
                   {note.note ?? note.title}
                 </span>
               </button>
