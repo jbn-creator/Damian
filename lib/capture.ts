@@ -124,6 +124,10 @@ export interface PageCapture {
 
 /** Our own cursor, which must never be audited as part of the page. */
 const CURSOR_ID = '__damian_cursor';
+/** The marker drawn around whatever is about to be pressed. */
+const MARK_ID = '__damian_mark';
+const MARK_FN = '__damianMark';
+const UNMARK_FN = '__damianUnmark';
 
 const VIEWPORT_WIDTH = 1440;
 const VIEWPORT_HEIGHT = 900;
@@ -184,7 +188,7 @@ export function assertPublicHttpUrl(raw: string): URL {
  * arithmetic, so none of it needs a model.
  */
 const AUDIT_SCRIPT = `JSON.stringify((() => {
-  const OURS = (el) => el && el.id === '${CURSOR_ID}';
+  const OURS = (el) => el && (el.id === '${CURSOR_ID}' || el.id === '${MARK_ID}');
   const W = innerWidth;
   const H = innerHeight;
   const pct = (el) => {
@@ -677,6 +681,40 @@ const PAGE_PRELUDE = `
     strip();
   };
 
+  /*
+   * Puts a marker on whatever is about to be pressed, so the live view shows
+   * the target rather than a cursor drifting toward something unnamed. It
+   * lives in the page, which is what makes it appear in the screencast.
+   */
+  window.${MARK_FN} = (rect, label) => {
+    document.getElementById('${MARK_ID}')?.remove();
+    const box = document.createElement('div');
+    box.id = '${MARK_ID}';
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = [
+      'position:fixed', 'z-index:2147483646', 'pointer-events:none',
+      'left:' + (rect.x - 6) + 'px', 'top:' + (rect.y - 6) + 'px',
+      'width:' + (rect.w + 12) + 'px', 'height:' + (rect.h + 12) + 'px',
+      'border:2px solid rgba(99,102,241,0.95)', 'border-radius:10px',
+      'box-shadow:0 0 0 3px rgba(99,102,241,0.25), 0 0 24px rgba(99,102,241,0.55)',
+      'transition:opacity .15s linear',
+    ].join(';');
+
+    const tag = document.createElement('div');
+    tag.textContent = label;
+    tag.style.cssText = [
+      'position:absolute', 'left:-2px', 'bottom:100%', 'margin-bottom:6px',
+      'white-space:nowrap', 'padding:4px 9px', 'border-radius:9999px',
+      'background:rgba(99,102,241,0.95)', 'color:#F3F4F6',
+      'font:600 11px/1.1 ui-sans-serif,sans-serif', 'letter-spacing:.04em',
+      'box-shadow:0 4px 14px rgba(8,9,12,0.6)',
+    ].join(';');
+    box.appendChild(tag);
+    document.documentElement.appendChild(box);
+  };
+
+  window.${UNMARK_FN} = () => document.getElementById('${MARK_ID}')?.remove();
+
   if (document.readyState === 'loading') {
     addEventListener('DOMContentLoaded', mount);
   } else {
@@ -937,8 +975,30 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       );
       if (!spot) return false;
 
-      await new Promise((r) => setTimeout(r, 260));
+      /* Say what is being pressed before pressing it. */
+      await evaluate(
+        `JSON.stringify((() => {
+          const want = ${JSON.stringify(url)};
+          const trim = (v) => (v.endsWith('/') ? v.slice(0, -1) : v);
+          const el = [...document.querySelectorAll('a[href]')].find((a) => {
+            try { return trim(new URL(a.href, location.href).href) === trim(want); }
+            catch { return false; }
+          });
+          if (!el) return {};
+          const r = [...el.getClientRects()].find((b) => b.width >= 1 && b.height >= 1);
+          if (!r) return {};
+          const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+          window.${MARK_FN}(
+            { x: r.x, y: r.y, w: r.width, h: r.height },
+            (text ? text.slice(0, 42) : new URL(el.href).pathname),
+          );
+          return {};
+        })())`,
+      ).catch(() => undefined);
+
+      await new Promise((r) => setTimeout(r, 700));
       await moveTo(spot.x, spot.y);
+      await new Promise((r) => setTimeout(r, 260));
 
       loaded = false;
       settled = false;
@@ -961,6 +1021,8 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
         buttons: 0,
         clickCount: 1,
       });
+
+      await evaluate(`JSON.stringify((window.${UNMARK_FN}?.(), {}))`).catch(() => undefined);
 
       await rest(12000);
       /* A click that moved nothing is a miss, not a navigation. */

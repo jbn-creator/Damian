@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowDown, Terminal } from 'lucide-react';
+import { ArrowDown, CornerDownRight, MousePointerClick, Terminal } from 'lucide-react';
 import { usePrefersReducedMotion } from '@/lib/use-media-query';
 import type { DamianLog } from '@/lib/types';
 
@@ -198,7 +198,52 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
             </div>
           ) : (
             <ol aria-live="polite" aria-relevant="additions" className="flex flex-col gap-3.5">
-              {logs.map((log) => (
+              {logs.map((log) =>
+                log.nav ? (
+                  /*
+                   * Changing page is a break in the walk, not one more remark
+                   * about the page he is on, so it is set as a rule across the
+                   * feed with the destination on it.
+                   */
+                  <li
+                    key={log.id}
+                    ref={(node) => {
+                      if (node) lines.current.set(log.id, node);
+                      else lines.current.delete(log.id);
+                    }}
+                    className="my-1 flex items-center gap-3 opacity-0"
+                  >
+                    <time
+                      data-numeric
+                      dateTime={`PT${log.timestamp.replace('s', 'S')}`}
+                      className="w-9 shrink-0 text-right text-tiny font-medium text-silver"
+                    >
+                      {log.timestamp}
+                    </time>
+
+                    <span className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-cobalt/35 bg-cobalt/10 px-3 py-1.5">
+                      {log.nav.clicked ? (
+                        <MousePointerClick
+                          aria-hidden="true"
+                          className="h-3 w-3 shrink-0 text-cobalt"
+                          strokeWidth={2.2}
+                        />
+                      ) : (
+                        <CornerDownRight
+                          aria-hidden="true"
+                          className="h-3 w-3 shrink-0 text-silver"
+                          strokeWidth={2.2}
+                        />
+                      )}
+                      <span className="truncate font-mono text-tiny font-semibold text-chalk">
+                        {log.nav.to}
+                      </span>
+                      <span className="ml-auto shrink-0 text-micro font-bold uppercase text-silver">
+                        {log.nav.clicked ? 'Clicked' : 'Went direct'}
+                      </span>
+                    </span>
+                  </li>
+                ) : (
                 <li
                   key={log.id}
                   ref={(node) => {
@@ -224,7 +269,8 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
                     <span aria-hidden="true">{splitForReveal(log)}</span>
                   </p>
                 </li>
-              ))}
+                ),
+              )}
 
               {isRunning ? (
                 <li className="flex items-start gap-3" aria-hidden="true">

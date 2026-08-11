@@ -128,7 +128,12 @@ export function useDamian(): DamianRun {
 
   /** Queue a line for Damian to say, in order, on the shared beat. */
   const say = useCallback(
-    (message: string, type: DamianLog['type'], ticket: number) => {
+    (
+      message: string,
+      type: DamianLog['type'],
+      ticket: number,
+      nav?: DamianLog['nav'],
+    ) => {
       const at = Math.max(beat.current, Date.now());
       beat.current = at + NOTE_BEAT;
       logSeq.current += 1;
@@ -147,6 +152,7 @@ export function useDamian(): DamianRun {
                       timestamp: `${((Date.now() - startedAt.current) / 1000).toFixed(1)}s`,
                       message,
                       type,
+                      nav,
                     },
                   ],
             );
@@ -348,12 +354,12 @@ export function useDamian(): DamianRun {
             const label = event.label as unknown as string;
             /* Back to watching the browser while he travels. */
             setShowLive(true);
+            const clicked = event.clicked as unknown as boolean;
             say(
-              (event.clicked as unknown as boolean)
-                ? `Clicking through to ${label}.`
-                : `Nothing clickable for ${label}. Going straight there.`,
+              clicked ? `Clicking through to ${label}.` : `Nothing to press. Going straight to ${label}.`,
               'action',
               ticket,
+              { to: label, clicked },
             );
             continue;
           }

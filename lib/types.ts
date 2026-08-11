@@ -49,6 +49,11 @@ export interface DamianLog {
   timestamp: string;
   message: string;
   type: 'info' | 'action' | 'insight';
+  /**
+   * Extension: set when this entry is Damian changing page, so the feed can
+   * show it as a break in the walk rather than as one more line of commentary.
+   */
+  nav?: { to: string; clicked: boolean };
 }
 
 export interface ScorecardMetric {
