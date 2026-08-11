@@ -130,6 +130,17 @@ export function PinPopover({
         aria-modal="false"
         aria-labelledby={titleId}
         tabIndex={-1}
+        onKeyDown={(event) => {
+          /*
+           * The panel handles its own Escape. The canvas also listens on the
+           * window for when focus has moved elsewhere, but a focused dialog
+           * should not depend on that to close.
+           */
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            onClose();
+          }
+        }}
         initial={
           reduced
             ? false
