@@ -23,8 +23,20 @@ const clamp = (value: number, min = 0, max = 100) =>
 /** The benchmark Damian quotes for how long a gate should be. */
 const FIELD_BENCHMARK = 3;
 
+/**
+ * How much a visitor would care, from 3 down to 1.
+ *
+ * Defensible and important are different axes, and the rules below were sorted
+ * on the wrong one. That two boxes start 10px apart is provable and nobody
+ * browsing the site will ever feel it. That the body copy is 12px, or that the
+ * page scrolls sideways on a phone, is felt by everyone. Notes come out highest
+ * first and the tail is dropped, so hygiene can never crowd out harm.
+ */
+type Weight = 3 | 2 | 1;
+
 interface Draft {
   id: string;
+  weight: Weight;
   type: AuditPin['type'];
   box: Rect | null | undefined;
   /** Spoken, about three lines. */
@@ -52,6 +64,7 @@ function draftsFor(audit: DomAudit): Draft[] {
     const label = audit.requiredCount ? 'required' : 'visible';
     drafts.push({
       id: 'fields',
+      weight: 3,
       type: 'friction',
       box: audit.formBox,
       note: `This form wants ${gate} things before it gives anything back. The median is ${FIELD_BENCHMARK}, and every field past the third is costing you finishers.`,
@@ -74,6 +87,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (!audit.h1) {
     drafts.push({
       id: 'no-h1',
+      weight: 2,
       type: 'warning',
       box: audit.structureBox,
       note: 'There is no h1 on this page. Nothing here declares what it actually is, so a screen reader and a crawler both arrive with nothing to go on.',
@@ -95,6 +109,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   } else if (!audit.h1HasNumber && anchored(audit.h1Box)) {
     drafts.push({
       id: 'headline',
+      weight: 2,
       type: 'warning',
       box: audit.h1Box,
       note: 'The headline makes a claim with nothing to check it against. One figure would do more work here than another adjective.',
@@ -124,6 +139,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   ) {
     drafts.push({
       id: 'align',
+      weight: 1,
       type: 'warning',
       box: audit.h1Box,
       note: `Hmm, I would not ${audit.h1Align === 'center' ? 'centre' : 'right align'} the title when the body under it runs to the other edge. Pick one edge and hold it down the page.`,
@@ -139,6 +155,7 @@ function draftsFor(audit: DomAudit): Draft[] {
     const { ratio, sample } = audit.worstContrast;
     drafts.push({
       id: 'contrast',
+      weight: 3,
       type: 'friction',
       box: audit.worstContrast.box,
       note: `You should change this colour. "${sample.slice(0, 32)}" sits at ${ratio} to 1 on its background when the floor is 4.5. In daylight that is guesswork.`,
@@ -162,6 +179,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (audit.colourOutlier && anchored(audit.colourOutlier.box)) {
     drafts.push({
       id: 'colour',
+      weight: 1,
       type: 'warning',
       box: audit.colourOutlier.box,
       note: `This is the only control on the page wearing ${audit.colourOutlier.colour}, while everything else uses ${audit.colourOutlier.dominant}. Right now it reads as a mistake rather than emphasis.`,
@@ -177,6 +195,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (audit.fontFamilies.length > 3 && anchored(audit.fontBox)) {
     drafts.push({
       id: 'fonts',
+      weight: 1,
       type: 'warning',
       box: audit.fontBox,
       note: `There are ${audit.fontFamilies.length} typefaces running on this page. Two is usually the ceiling before type stops looking deliberate.`,
@@ -190,6 +209,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (audit.tinyTapTargets > 0 && anchored(audit.tinyTapBox)) {
     drafts.push({
       id: 'targets',
+      weight: 3,
       type: 'friction',
       box: audit.tinyTapBox,
       note: `${audit.tinyTapTargets} of your ${audit.interactive} controls are under 24 pixels. On a phone that is a coin flip every time someone taps.`,
@@ -212,6 +232,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (audit.imagesMissingAlt > 0 && anchored(audit.missingAltBox)) {
     drafts.push({
       id: 'alt',
+      weight: 2,
       type: 'warning',
       box: audit.missingAltBox,
       note: `${audit.imagesMissingAlt} of ${audit.images} images here have no alt text. Anyone not looking at the screen gets nothing from them.`,
@@ -244,6 +265,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   ) {
     drafts.push({
       id: 'no-grid',
+      weight: 1,
       type: 'friction',
       box: audit.offGridBox ?? audit.structureBox,
       note: `There is no spacing system here. ${audit.spacingSpread} different values in play, the commonest being ${audit.commonSpacings.slice(0, 4).join('px, ')}px. Nothing lines up because nothing agrees.`,
@@ -268,6 +290,7 @@ function draftsFor(audit: DomAudit): Draft[] {
     const others = audit.offGrid.slice(1, 4).map((entry) => `${entry.value}px`);
     drafts.push({
       id: 'grid',
+      weight: 1,
       type: 'friction',
       box: audit.offGridBox,
       note: `Your spacing runs on a ${audit.spacingBase}px grid, ${Math.round(audit.spacingAdherence * 100)}% of the time. This one is ${worst.value}px${others.length ? `, and so are ${others.join(', ')}` : ''}.`,
@@ -291,6 +314,7 @@ function draftsFor(audit: DomAudit): Draft[] {
     const { a, b } = audit.typeNearDupe;
     drafts.push({
       id: 'type-dupe',
+      weight: 1,
       type: 'warning',
       box: audit.typeNearDupe.box,
       note: `You are running ${a}px and ${b}px as separate sizes. Nobody can see ${Math.round((b - a) * 10) / 10}px of difference, so this is one size that became two.`,
@@ -314,6 +338,7 @@ function draftsFor(audit: DomAudit): Draft[] {
     const { a, b } = audit.colourNearMiss;
     drafts.push({
       id: 'colour-dupe',
+      weight: 1,
       type: 'warning',
       box: audit.colourNearMiss.box,
       note: `${a} and ${b} are both in use here. They are indistinguishable, so that is one token somebody duplicated by hand.`,
@@ -336,6 +361,7 @@ function draftsFor(audit: DomAudit): Draft[] {
   if (audit.alignNearMiss && anchored(audit.alignNearMiss.box)) {
     drafts.push({
       id: 'align-drift',
+      weight: 1,
       type: 'friction',
       box: audit.alignNearMiss.box,
       note: `This is ${audit.alignNearMiss.drift}px off the edge of the thing beside it. Not enough to look deliberate, just enough to look wrong.`,
@@ -343,6 +369,114 @@ function draftsFor(audit: DomAudit): Draft[] {
       description: `Two elements sharing a horizontal band start ${audit.alignNearMiss.drift}px apart. Either they line up or they clearly do not, and a few pixels reads as a mistake to everyone without anyone being able to say why.`,
       fix: 'Snap it to the same edge as its neighbour.',
       score: 52,
+    });
+  }
+
+  if (audit.mobileOverflow > 8 && anchored(audit.structureBox ?? audit.h1Box)) {
+    drafts.push({
+      id: 'mobile-overflow',
+      weight: 3,
+      type: 'friction',
+      box: audit.structureBox ?? audit.h1Box,
+      note: `On a phone this page scrolls sideways by ${audit.mobileOverflow}px. Everyone on mobile is dragging the layout around to read it.`,
+      title: `Scrolls sideways on a phone`,
+      description: `Damian narrowed the window to 390px and the page still needed ${audit.mobileOverflow} more pixels of width. Something inside has a fixed size the layout cannot honour, so on a phone the whole page shifts under the thumb.`,
+      fix: 'Find the fixed width and let it shrink. Usually one table, one image or one pre block.',
+      score: clamp(70 + audit.mobileOverflow / 8),
+      idea: {
+        id: 'idea-mobile-overflow',
+        category: 'quick_win',
+        title: 'Stop the page scrolling sideways on mobile',
+        description: 'At phone width the page is wider than the screen, so it drags horizontally.',
+        solution: 'Track down the element with the fixed width and allow it to reflow.',
+        impact: 'High',
+        effort: '2h',
+      },
+    });
+  }
+
+  if (audit.smallText && anchored(audit.smallText.box)) {
+    const { size, share } = audit.smallText;
+    drafts.push({
+      id: 'small-text',
+      weight: 3,
+      type: 'friction',
+      box: audit.smallText.box,
+      note: `This copy is set at ${size}px, and ${share}% of the body text on this page is that small. Anyone over forty is zooming in or leaving.`,
+      title: `Body copy at ${size}px`,
+      description: `Damian measured every block of running text. The smallest is ${size}px and ${share} percent of the body copy sits under 14px, which is below what is comfortable to read at arm's length on any screen.`,
+      fix: 'Take body copy to 16px and let the small sizes be for labels only.',
+      score: clamp(62 + (14 - size) * 6),
+      idea: {
+        id: 'idea-small-text',
+        category: 'quick_win',
+        title: 'Raise the body copy to 16px',
+        description: 'Running text is set below 14px, which is uncomfortable for most readers.',
+        solution: 'Set body copy at 16px and reserve smaller sizes for labels and captions.',
+        impact: 'High',
+        effort: '1h',
+      },
+    });
+  }
+
+  if (audit.competingActions && anchored(audit.competingActions.box)) {
+    drafts.push({
+      id: 'competing-cta',
+      weight: 3,
+      type: 'friction',
+      box: audit.competingActions.box,
+      note: `There are ${audit.competingActions.count} things up here fighting to look like the main action. A visitor cannot tell which one you want, so most of them pick none.`,
+      title: `${audit.competingActions.count} actions with equal weight`,
+      description: `Damian weighed every control on the first screen by size and fill. The top ${audit.competingActions.count} come out within a tenth of each other, so nothing reads as the primary action and the choice gets handed back to the visitor.`,
+      fix: 'Pick one. Everything else on this screen becomes a link or a ghost button.',
+      score: 78,
+      idea: {
+        id: 'idea-competing-cta',
+        category: 'quick_win',
+        title: 'Leave one primary action above the fold',
+        description: 'Several controls carry equal visual weight on the first screen.',
+        solution: 'Promote one action and demote the rest to text links or outlined buttons.',
+        impact: 'High',
+        effort: '2h',
+      },
+    });
+  }
+
+  if (audit.actionBelowFold) {
+    drafts.push({
+      id: 'action-below-fold',
+      weight: 3,
+      type: 'friction',
+      box: audit.actionBelowFold.box,
+      note: 'There is nothing to press on the first screen. The only real action is further down, so anyone who does not scroll never finds it.',
+      title: 'No action above the fold',
+      description:
+        'Damian found no substantial control on the first screen, and the first filled button only appears after scrolling. Everyone who lands here has to work out that there is more before they can act.',
+      fix: 'Bring one action up next to the headline. It does not have to be the only one.',
+      score: 74,
+      idea: {
+        id: 'idea-action-below-fold',
+        category: 'quick_win',
+        title: 'Put an action on the first screen',
+        description: 'The first viewport carries no primary action.',
+        solution: 'Lift the main action up beside the headline.',
+        impact: 'High',
+        effort: '1h',
+      },
+    });
+  }
+
+  if (audit.longLine && anchored(audit.longLine.box)) {
+    drafts.push({
+      id: 'long-line',
+      weight: 2,
+      type: 'warning',
+      box: audit.longLine.box,
+      note: `This runs about ${audit.longLine.chars} characters a line. Past ninety or so people start losing which line they were on.`,
+      title: `${audit.longLine.chars} characters per line`,
+      description: `Damian measured the rendered width of this block against the width of one character in its own font: about ${audit.longLine.chars} characters per line. Long measures make the return sweep to the next line unreliable, which is felt as tiredness rather than noticed as a problem.`,
+      fix: 'Cap the measure around 70 characters with a max width on the text column.',
+      score: 48,
     });
   }
 
@@ -365,6 +499,11 @@ const REPEAT_LINE: Record<string, string> = {
   fonts: 'Same spread of typefaces on this page.',
   targets: 'The small controls carry over to this page.',
   alt: 'More images without alt text here.',
+  'mobile-overflow': 'Sideways scroll on a phone here too.',
+  'small-text': 'Same undersized copy on this page.',
+  'competing-cta': 'Same fight between actions up here.',
+  'action-below-fold': 'Nothing to press on this first screen either.',
+  'long-line': 'Lines run long here as well.',
   'no-grid': 'Spacing is unsystematic here too.',
   grid: 'Same spacing strays on this page.',
   'type-dupe': 'Those two type sizes again here.',
@@ -393,7 +532,19 @@ export function analysePage(
     };
   }
 
-  const drafts = draftsFor(capture.audit).filter((draft) => anchored(draft.box));
+  const MAX_NOTES_PER_PAGE = 4;
+  const drafts = draftsFor(capture.audit)
+    .filter((draft) => anchored(draft.box))
+    /*
+     * Weight 1 is design system hygiene: two greys a hair apart, a box 10px off
+     * its neighbour. Provable, and no visitor will ever feel it. Those belong on
+     * the board as tidying, not spoken aloud over the page as though they were
+     * costing somebody something. Only what a visitor would notice gets a note.
+     */
+    .filter((draft) => draft.weight >= 2)
+    /* Heaviest first, and where two weigh the same, the higher score wins. */
+    .sort((a, b) => b.weight - a.weight || b.score - a.score)
+    .slice(0, MAX_NOTES_PER_PAGE);
 
   /*
    * Two rules can land on the same element, and that is correct: both frames

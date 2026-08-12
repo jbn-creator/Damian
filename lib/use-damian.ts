@@ -46,6 +46,8 @@ export interface DamianRun {
   mode: RunMode;
   /** The live view while Damian is walking. Null once he stops. */
   liveFrame: string | null;
+  /** Where he is heading, set for as long as the move is happening. */
+  heading: { to: string; clicked: boolean } | null;
   /** Why the run fell back to the scripted demo, if it did. */
   fallbackReason: string | null;
 
@@ -95,6 +97,7 @@ export function useDamian(): DamianRun {
   const [liveFrame, setLiveFrame] = useState<string | null>(null);
   /* True while he is moving between pages, false while a page is being read. */
   const [showLive, setShowLive] = useState(false);
+  const [heading, setHeading] = useState<{ to: string; clicked: boolean } | null>(null);
   const [mode, setMode] = useState<RunMode>('demo');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
 
@@ -124,6 +127,7 @@ export function useDamian(): DamianRun {
     setMetrics(NO_METRICS);
     setFallbackReason(null);
     setLiveFrame(null);
+    setHeading(null);
   }, [clearSchedule]);
 
   /** Queue a line for Damian to say, in order, on the shared beat. */
@@ -180,6 +184,7 @@ export function useDamian(): DamianRun {
       setActivePage(index);
       /* Stop watching the browser: this page is what is being read now. */
       setShowLive(false);
+      setHeading(null);
       say(`Opened ${page.label}. Reading it.`, 'info', ticket);
     },
     [say],
@@ -247,6 +252,7 @@ export function useDamian(): DamianRun {
     setFallbackReason(null);
     setLiveFrame(null);
     setShowLive(true);
+    setHeading(null);
     setState('launching');
     startedAt.current = Date.now();
     beat.current = Date.now();
@@ -355,6 +361,7 @@ export function useDamian(): DamianRun {
             /* Back to watching the browser while he travels. */
             setShowLive(true);
             const clicked = event.clicked as unknown as boolean;
+            setHeading({ to: label, clicked });
             say(
               clicked ? `Clicking through to ${label}.` : `Nothing to press. Going straight to ${label}.`,
               'action',
@@ -386,6 +393,7 @@ export function useDamian(): DamianRun {
 
           if (event.type === 'done') {
             setLiveFrame(null);
+            setHeading(null);
             const finish = beat.current + NOTE_BEAT;
             const nextIdeas = event.ideas as unknown as ProductIdea[];
             const nextMetrics = event.metrics as unknown as ScorecardMetric[];
@@ -456,6 +464,7 @@ export function useDamian(): DamianRun {
     hasCompleted,
     mode,
     liveFrame: showLive ? liveFrame : null,
+    heading,
     fallbackReason,
     pages,
     activePage,

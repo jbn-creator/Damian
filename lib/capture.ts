@@ -94,6 +94,18 @@ export interface DomAudit {
   colourNearMiss: { a: string; b: string; box: Rect } | null;
   /** Two elements in the same band that almost line up. */
   alignNearMiss: { drift: number; box: Rect } | null;
+
+  /* What a visitor actually runs into. */
+  /** Body copy set too small to read comfortably. */
+  smallText: { size: number; share: number; box: Rect } | null;
+  /** A column of prose too wide to track from one line to the next. */
+  longLine: { chars: number; box: Rect } | null;
+  /** Nothing above the fold looks more pressable than anything else. */
+  competingActions: { count: number; box: Rect } | null;
+  /** The primary action sits below the first screen. */
+  actionBelowFold: { box: Rect } | null;
+  /** How far the page scrolls sideways on a phone. */
+  mobileOverflow: number;
 }
 
 /** What the walk emits: live frames as they paint, pages as they finish. */
@@ -558,6 +570,81 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     }
   }
 
+  /*
+   * The findings a visitor would actually notice. Text they cannot read, lines
+   * they lose their place in, and a screen that never tells them what to press.
+   * Measured the same way as everything else, but these are the ones that cost
+   * somebody something.
+   */
+  const readable = [...document.querySelectorAll('p, li, dd, blockquote')]
+    .filter((el) => seen(el) && el.textContent.trim().length > 60);
+
+  let smallText = null;
+  if (readable.length) {
+    const tooSmall = readable.filter((el) => parseFloat(getComputedStyle(el).fontSize) < 14);
+    if (tooSmall.length) {
+      const size = Math.min(...tooSmall.map((el) => parseFloat(getComputedStyle(el).fontSize)));
+      const box = tooSmall.map(boxOf).find((b) => b);
+      if (box) {
+        smallText = {
+          size: Math.round(size * 10) / 10,
+          share: Math.round((tooSmall.length / readable.length) * 100),
+          box,
+        };
+      }
+    }
+  }
+
+  /*
+   * Line length, measured rather than guessed: the rendered width of the block
+   * divided by the width of one character in its own font.
+   */
+  let longLine = null;
+  for (const el of readable) {
+    const cs = getComputedStyle(el);
+    swatch.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+    const unit = swatch.measureText('mmmmmmmmmm').width / 10;
+    if (!(unit > 0)) continue;
+    const chars = Math.round(el.getBoundingClientRect().width / unit);
+    if (chars > 95 && (!longLine || chars > longLine.chars)) {
+      const box = boxOf(el);
+      if (box) longLine = { chars, box };
+    }
+  }
+
+  /* Above the fold, is there one obvious thing to press, or several, or none? */
+  const firstScreen = interactive.filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.top >= 0 && r.top < H && r.width >= 60 && r.height >= 28;
+  });
+  const weigh = (el) => {
+    const r = el.getBoundingClientRect();
+    const c = rgb(getComputedStyle(el).backgroundColor);
+    /* A filled control outweighs a bare link of the same size. */
+    return Math.sqrt(r.width * r.height) * (c && c.a > 0.5 ? 1.8 : 1);
+  };
+  const byWeight = firstScreen.map((el) => ({ el, w: weigh(el) })).sort((a, b) => b.w - a.w);
+  let competingActions = null;
+  if (byWeight.length >= 2 && byWeight[0].w / byWeight[1].w < 1.12) {
+    const rivals = byWeight.filter((r) => r.w / byWeight[0].w > 0.88).length;
+    const box = boxOf(byWeight[0].el);
+    if (box && rivals >= 2) competingActions = { count: rivals, box };
+  }
+
+  /* Or does the thing they came to press only exist further down? */
+  let actionBelowFold = null;
+  if (firstScreen.length === 0) {
+    const below = interactive.find((el) => {
+      const r = el.getBoundingClientRect();
+      const c = rgb(getComputedStyle(el).backgroundColor);
+      return r.top >= H && r.width >= 90 && r.height >= 32 && c && c.a > 0.5;
+    });
+    if (below) {
+      /* Off screen by definition, so the note is anchored at the fold. */
+      actionBelowFold = { box: { x: 50, y: 92, w: 24, h: 5 } };
+    }
+  }
+
   const commonSpacings = [...spacingTally.entries()]
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 5)
@@ -576,6 +663,11 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     typeNearDupe,
     colourNearMiss,
     alignNearMiss,
+    smallText,
+    longLine,
+    competingActions,
+    actionBelowFold,
+    mobileOverflow: 0,
     h1: h1Text ? h1Text.slice(0, 160) : null,
     h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,
@@ -723,6 +815,9 @@ const PAGE_PRELUDE = `
 })();
 `;
 
+/** How far a page scrolls sideways on a phone, which is always a bug. */
+const MOBILE_WIDTH = 390;
+
 interface Session {
   send: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
   evaluate: <T>(expression: string) => Promise<T>;
@@ -731,6 +826,8 @@ interface Session {
   clickLink: (url: string) => Promise<boolean>;
   /** Drag the page down so the whole thing passes the camera. */
   scrollThrough: () => Promise<void>;
+  /** Check the page at phone width, then put the viewport back. */
+  measureMobile: () => Promise<number>;
   close: () => Promise<void>;
 }
 
@@ -1067,7 +1164,38 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       await new Promise((r) => setTimeout(r, 320));
     };
 
-    return { send, evaluate, goto, clickLink, scrollThrough, close };
+    /*
+     * Narrow the viewport, measure, and set it straight back. A page that
+     * scrolls sideways on a phone is something every visitor on a phone hits,
+     * and it cannot be seen at desktop width.
+     */
+    const measureMobile = async () => {
+      try {
+        await send('Emulation.setDeviceMetricsOverride', {
+          width: MOBILE_WIDTH,
+          height: 844,
+          deviceScaleFactor: 1,
+          mobile: true,
+        });
+        await new Promise((r) => setTimeout(r, 700));
+        const overflow = await evaluate<{ px: number }>(
+          `JSON.stringify({ px: Math.max(0, Math.round(document.documentElement.scrollWidth - window.innerWidth)) })`,
+        );
+        return overflow.px;
+      } catch {
+        return 0;
+      } finally {
+        await send('Emulation.setDeviceMetricsOverride', {
+          width: VIEWPORT_WIDTH,
+          height: VIEWPORT_HEIGHT,
+          deviceScaleFactor: 1,
+          mobile: false,
+        }).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    };
+
+    return { send, evaluate, goto, clickLink, scrollThrough, measureMobile, close };
   } catch (error) {
     await close();
     throw error;
@@ -1131,7 +1259,10 @@ export async function* crawl(
 
   const capturePage = async (url: string, label: string): Promise<PageCapture> => {
     const audit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
-    return { url, label, screenshot: await shoot(session), audit: { ...audit, url } };
+    const screenshot = await shoot(session);
+    /* Measured after the shot, so narrowing the viewport cannot affect it. */
+    const mobileOverflow = await session.measureMobile();
+    return { url, label, screenshot, audit: { ...audit, url, mobileOverflow } };
   };
 
   const walk = (async () => {

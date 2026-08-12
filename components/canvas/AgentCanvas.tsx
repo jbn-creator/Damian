@@ -26,6 +26,8 @@ interface AgentCanvasProps {
   onSelectPage: (index: number) => void;
   /** What Damian is looking at right now, while he is still walking. */
   liveFrame: string | null;
+  /** Where he is heading, set for as long as the move is happening. */
+  heading: { to: string; clicked: boolean } | null;
 }
 
 const ZOOM_STEPS = [1, 1.25, 1.5, 1.75, 2] as const;
@@ -43,7 +45,17 @@ const clamp = (value: number, min: number, max: number) =>
  */
 export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
   function AgentCanvas(
-    { url, state, notes, isRunning, pages, activePage, onSelectPage, liveFrame },
+    {
+      url,
+      state,
+      notes,
+      isRunning,
+      pages,
+      activePage,
+      onSelectPage,
+      liveFrame,
+      heading,
+    },
     ref,
   ) {
     const page = pages[activePage] ?? null;
@@ -263,6 +275,45 @@ export const AgentCanvas = forwardRef<HTMLElement, AgentCanvasProps>(
                       spotlit={isRunning}
                     />
                   </div>
+
+                  {/*
+                    The move, announced. A page change used to be a quiet swap
+                    of one screenshot for another, easy to miss entirely.
+                  */}
+                  <AnimatePresence>
+                    {heading ? (
+                      <motion.div
+                        key={`heading-${heading.to}`}
+                        initial={reduced ? false : { opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={reduced ? { duration: 0 } : { duration: 0.26 }}
+                        className="absolute inset-0 z-20 grid place-items-center bg-void/70 backdrop-blur-[2px]"
+                      >
+                        <motion.div
+                          initial={reduced ? false : { y: 14, scale: 0.96 }}
+                          animate={{ y: 0, scale: 1 }}
+                          transition={
+                            reduced
+                              ? { duration: 0 }
+                              : { duration: 0.42, ease: [0.16, 0.84, 0.24, 1] }
+                          }
+                          className="flex items-center gap-3 rounded-full border border-cobalt/45 bg-obsidian/95 px-5 py-3 shadow-panel"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="h-2 w-2 shrink-0 rounded-full bg-cobalt animate-breathe"
+                          />
+                          <span className="text-micro font-bold uppercase text-silver">
+                            {heading.clicked ? 'Clicking through to' : 'Going to'}
+                          </span>
+                          <span className="font-mono text-tiny font-semibold text-chalk">
+                            {heading.to}
+                          </span>
+                        </motion.div>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
 
                   {/* Session state overlays. */}
                   <AnimatePresence>
