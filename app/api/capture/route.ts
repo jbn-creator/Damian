@@ -1,5 +1,6 @@
 import { crawl, findChrome, type PageCapture } from '@/lib/capture';
 import { analysePage, summarise } from '@/lib/findings';
+import { canJudge, judgePage } from '@/lib/judge';
 
 /* Chrome is spawned per request, so this cannot run on the edge. */
 export const runtime = 'nodejs';
@@ -75,7 +76,13 @@ export async function POST(request: Request) {
        */
       const readPage = async (capture: PageCapture, index: number) => {
         captures.push(capture);
-        const { notes, says } = analysePage(capture, index, seenRules);
+        /*
+         * Judgement first, measurement second. The rules can only report what
+         * they can count, so when a model is available it decides what matters
+         * and the rules stand behind it for when it is not.
+         */
+        const { notes, says } =
+          (await judgePage(capture, index)) ?? analysePage(capture, index, seenRules);
         emit({ type: 'page', index, capture, notes, says });
 
         for (let order = 0; order < notes.length; order += 1) {
