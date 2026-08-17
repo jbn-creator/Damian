@@ -372,13 +372,15 @@ function draftsFor(audit: DomAudit): Draft[] {
     });
   }
 
-  if (audit.mobileOverflow > 8 && anchored(audit.structureBox ?? audit.h1Box)) {
+  if (audit.mobileOverflow > 8 && anchored(audit.mobileCulpritBox ?? audit.structureBox ?? audit.h1Box)) {
     drafts.push({
       id: 'mobile-overflow',
       weight: 3,
       type: 'friction',
-      box: audit.structureBox ?? audit.h1Box,
-      note: `On a phone this page scrolls sideways by ${audit.mobileOverflow}px. Everyone on mobile is dragging the layout around to read it.`,
+      box: audit.mobileCulpritBox ?? audit.structureBox ?? audit.h1Box,
+      note: audit.mobileCulprit
+        ? `On a phone this scrolls sideways by ${audit.mobileOverflow}px, and this ${audit.mobileCulprit} is what does not fit. Everyone on mobile is dragging the layout around.`
+        : `On a phone this page scrolls sideways by ${audit.mobileOverflow}px. Everyone on mobile is dragging the layout around to read it.`,
       title: `Scrolls sideways on a phone`,
       description: `Damian narrowed the window to 390px and the page still needed ${audit.mobileOverflow} more pixels of width. Something inside has a fixed size the layout cannot honour, so on a phone the whole page shifts under the thumb.`,
       fix: 'Find the fixed width and let it shrink. Usually one table, one image or one pre block.',

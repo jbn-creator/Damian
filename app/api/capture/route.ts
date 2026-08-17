@@ -17,8 +17,8 @@ export const maxDuration = 300;
 const WORDS_PER_SECOND = 3.96666666667;
 
 /** Long enough to register, short enough not to stall on a three word note. */
-const MIN_DWELL = 1400;
-const MAX_DWELL = 11000;
+const MIN_DWELL = 900;
+const MAX_DWELL = 6000;
 
 const dwellFor = (text: string) => {
   const words = text.trim().split(/\s+/).filter(Boolean).length;

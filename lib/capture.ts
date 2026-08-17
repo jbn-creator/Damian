@@ -104,8 +104,10 @@ export interface DomAudit {
   competingActions: { count: number; box: Rect } | null;
   /** The primary action sits below the first screen. */
   actionBelowFold: { box: Rect } | null;
-  /** How far the page scrolls sideways on a phone. */
+  /** How far the page scrolls sideways on a phone, and what causes it. */
   mobileOverflow: number;
+  mobileCulprit: string | null;
+  mobileCulpritBox: Rect | null;
 }
 
 /** What the walk emits: live frames as they paint, pages as they finish. */
@@ -668,6 +670,8 @@ const AUDIT_SCRIPT = `JSON.stringify((() => {
     competingActions,
     actionBelowFold,
     mobileOverflow: 0,
+    mobileCulprit: null,
+    mobileCulpritBox: null,
     h1: h1Text ? h1Text.slice(0, 160) : null,
     h1Box: boxOf(h1),
     h1HasNumber: h1Text ? /\\d/.test(h1Text) : false,
@@ -827,7 +831,7 @@ interface Session {
   /** Drag the page down so the whole thing passes the camera. */
   scrollThrough: () => Promise<void>;
   /** Check the page at phone width, then put the viewport back. */
-  measureMobile: () => Promise<number>;
+  measureMobile: () => Promise<{ px: number; culprit: string | null }>;
   close: () => Promise<void>;
 }
 
@@ -989,7 +993,8 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       while (!loaded && !settled && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100));
       }
-      await new Promise((r) => setTimeout(r, 1100));
+      /* A short settle for the paint that follows load. */
+      await new Promise((r) => setTimeout(r, 700));
     };
 
     const goto = async (url: string) => {
@@ -1130,7 +1135,13 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       const height = await evaluate<{ page: number }>(
         `JSON.stringify({ page: document.documentElement.scrollHeight })`,
       );
-      const passes = Math.min(4, Math.floor(height.page / VIEWPORT_HEIGHT));
+      /*
+       * Two quick passes, not four slow ones. The point is to let lazy content
+       * paint and to show movement, not to read the page twice. Four passes at
+       * 900px a second was around four seconds on every page, which was most of
+       * the time the walk took and none of the value it delivered.
+       */
+      const passes = Math.min(2, Math.floor(height.page / VIEWPORT_HEIGHT));
       for (let pass = 0; pass < passes; pass += 1) {
         try {
           await send('Input.synthesizeScrollGesture', {
@@ -1139,7 +1150,7 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
             xDistance: 0,
             /* Negative scrolls the page down. The sign reads backwards. */
             yDistance: -(VIEWPORT_HEIGHT - 120),
-            speed: 900,
+            speed: 1800,
             preventFling: true,
             gestureSourceType: 'mouse',
           });
@@ -1158,10 +1169,10 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
             await new Promise((r) => setTimeout(r, 30));
           }
         }
-        await new Promise((r) => setTimeout(r, 220));
+        await new Promise((r) => setTimeout(r, 120));
       }
       await evaluate(`JSON.stringify((window.scrollTo(0, 0), {}))`);
-      await new Promise((r) => setTimeout(r, 320));
+      await new Promise((r) => setTimeout(r, 240));
     };
 
     /*
@@ -1177,13 +1188,35 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
           deviceScaleFactor: 1,
           mobile: true,
         });
-        await new Promise((r) => setTimeout(r, 700));
-        const overflow = await evaluate<{ px: number }>(
-          `JSON.stringify({ px: Math.max(0, Math.round(document.documentElement.scrollWidth - window.innerWidth)) })`,
+        await new Promise((r) => setTimeout(r, 600));
+        /*
+         * Find the widest thing sticking out and tag it, so once the viewport is
+         * back at desktop width the note can point at the element that actually
+         * causes the overflow rather than gesturing at the page in general.
+         */
+        const overflow = await evaluate<{ px: number; culprit: string | null }>(
+          `JSON.stringify((() => {
+            const px = Math.max(0, Math.round(document.documentElement.scrollWidth - window.innerWidth));
+            document.querySelectorAll('[data-damian-wide]').forEach((el) => el.removeAttribute('data-damian-wide'));
+            if (px <= 8) return { px, culprit: null };
+            let worst = null;
+            let over = 0;
+            for (const el of document.querySelectorAll('body *')) {
+              const r = el.getBoundingClientRect();
+              if (r.width < 40 || r.height < 8) continue;
+              const spill = Math.round(r.right - window.innerWidth);
+              if (spill > over) { over = spill; worst = el; }
+            }
+            if (!worst) return { px, culprit: null };
+            worst.setAttribute('data-damian-wide', '1');
+            const name = worst.tagName.toLowerCase();
+            const text = (worst.innerText || '').replace(/[\\s]+/g, ' ').trim().slice(0, 30);
+            return { px, culprit: text ? name + ' with "' + text + '"' : name };
+          })())`,
         );
-        return overflow.px;
+        return overflow;
       } catch {
-        return 0;
+        return { px: 0, culprit: null };
       } finally {
         await send('Emulation.setDeviceMetricsOverride', {
           width: VIEWPORT_WIDTH,
@@ -1257,12 +1290,53 @@ export async function* crawl(
 
   const session = await openSession((frame) => push({ type: 'frame', frame }));
 
+  /*
+   * Checked on the entry page only. Narrowing and restoring the viewport costs
+   * over a second, and a fixed width that breaks mobile is nearly always in
+   * shared layout rather than on one page.
+   */
+  let mobileChecked = false;
+
   const capturePage = async (url: string, label: string): Promise<PageCapture> => {
     const audit = await session.evaluate<DomAudit>(AUDIT_SCRIPT);
     const screenshot = await shoot(session);
-    /* Measured after the shot, so narrowing the viewport cannot affect it. */
-    const mobileOverflow = await session.measureMobile();
-    return { url, label, screenshot, audit: { ...audit, url, mobileOverflow } };
+
+    let mobileOverflow = 0;
+    let mobileCulprit: string | null = null;
+    let mobileCulpritBox: Rect | null = null;
+    if (!mobileChecked) {
+      mobileChecked = true;
+      /* Measured after the shot, so narrowing the viewport cannot affect it. */
+      const mobile = await session.measureMobile();
+      mobileOverflow = mobile.px;
+      mobileCulprit = mobile.culprit;
+      if (mobile.culprit) {
+        mobileCulpritBox = await session
+          .evaluate<Rect | null>(
+            `JSON.stringify((() => {
+              const el = document.querySelector('[data-damian-wide]');
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              el.removeAttribute('data-damian-wide');
+              if (r.bottom < 0 || r.top > innerHeight) return null;
+              return {
+                x: +((r.left + r.width / 2) / innerWidth * 100).toFixed(2),
+                y: +((r.top + r.height / 2) / innerHeight * 100).toFixed(2),
+                w: +(r.width / innerWidth * 100).toFixed(2),
+                h: +(r.height / innerHeight * 100).toFixed(2),
+              };
+            })())`,
+          )
+          .catch(() => null);
+      }
+    }
+
+    return {
+      url,
+      label,
+      screenshot,
+      audit: { ...audit, url, mobileOverflow, mobileCulprit, mobileCulpritBox },
+    };
   };
 
   const walk = (async () => {
