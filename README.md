@@ -36,18 +36,37 @@ npm run typecheck  tsc, no emit
 
 ## What is real and what is simulated
 
-There is no backend, no API routes and no server actions. The browsing is
-simulated: a scripted timeline in `lib/mock-data.ts` played back on real timers
-by `lib/use-damian.ts`, so the interface handles streaming arrival, out of order
-reads and mid run interaction exactly as it would against a live Chromium
-session. Credentials are held in memory for the session and never leave the
-browser.
+The browsing is real. `app/api/capture/route.ts` drives a headless Chrome over
+raw CDP from `lib/capture.ts`, with no automation dependency, and streams the
+walk back as newline delimited JSON: live frames as they paint, then each page
+as it finishes. Damian resolves links, moves a visible cursor, verifies the hit
+test before pressing, scrolls, narrows to phone width, and measures the DOM.
+`lib/use-damian.ts` reads that stream.
 
-The capture is not a fetched image. `components/canvas/CapturedSurface.tsx`
-draws a simulated target application from the design tokens, sized entirely in
-percentages of a fixed aspect container. That is what lets the pin popover
-reuse the same component at 3x as a genuine zoomed crop of the pinned region
-rather than a second, faked one.
+The scripted timeline in `lib/mock-data.ts` is the fallback, played back on real
+timers when the host has no Chrome. The interface says so when that happens
+rather than presenting it as a capture.
+
+Bot walls are detected and named, never bypassed, and no finding is reported
+from behind one. Credentials are held in memory for the session.
+
+### What Damian says
+
+Two layers, and the second is optional.
+
+`lib/findings.ts` is arithmetic on measured DOM values, so it costs nothing and
+invents nothing. Every rule carries a weight: what a visitor would feel gets
+spoken over the page, and design system hygiene only reaches the board.
+
+`lib/judge.ts` is judgement. Set `ANTHROPIC_API_KEY` and each captured screen
+goes to a vision model along with every measurement already taken, and the
+model decides what is worth saying: whether the theme coheres, whether the page
+reads as generated, whether the primary action is actually clear, where
+structure rather than styling is the problem. Nothing in the brief enumerates
+findings for it, because a list of findings to look for is the rule engine
+again. The measurements are passed in as the only figures it may quote, so a
+number in a note is still a number somebody measured. Without a key, or if the
+call fails, the rules answer instead.
 
 ## Design system
 
