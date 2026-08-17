@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { DomAudit, PageCapture, Rect } from './capture';
 import type { AuditPin } from './types';
 import type { PageNotes } from './findings';
@@ -20,15 +19,29 @@ import type { PageNotes } from './findings';
  * The measurements are passed in for one reason: they are the only numbers
  * Damian is allowed to quote. The model may say what it sees, but a figure has
  * to come from something that was actually measured.
+ *
+ * Any OpenAI shaped chat endpoint will do. It defaults to Z.ai because that is
+ * what this runs on, and it has to be a model that can see: the questions above
+ * are visual, so a text only model cannot answer them however capable it is.
  */
 
-const MODEL = 'claude-opus-5';
+const ENDPOINT =
+  process.env.GLM_BASE_URL?.replace(/\/$/, '') ?? 'https://api.z.ai/api/paas/v4';
+
+/**
+ * Vision, deliberately.
+ *
+ * glm-5.2 is the stronger reasoner but takes text only, so it would be judging
+ * a description of the page rather than the page. Override if that changes.
+ */
+const MODEL = process.env.GLM_MODEL ?? 'glm-5v-turbo';
 
 /** The frame every capture is taken at, and the space boxes come back in. */
 const FRAME_W = 1440;
 const FRAME_H = 900;
 
 const MAX_FINDINGS = 4;
+const TIMEOUT_MS = 90_000;
 
 /**
  * What Damian is for.
@@ -59,68 +72,18 @@ Numbers: you may only state a figure that appears in the measurements given to y
 
 Voice: second person, present tense, about three lines per note, no em dashes, no en dashes, no double hyphens, no lists inside a note. Say the problem and what you would do about it. Do not name yourself.
 
-Boxes: give the tightest rectangle around the element the note is about, in pixels of the ${FRAME_W} by ${FRAME_H} screenshot, origin top left. Box the element, not the section it sits in. A note whose box is a whole band of the page is a note nobody can act on.`;
+Reply with JSON only, in exactly this shape and nothing else:
 
-const SCHEMA = {
-  type: 'object',
-  properties: {
-    findings: {
-      type: 'array',
-      description: `At most ${MAX_FINDINGS}, strongest first. Empty if this screen genuinely has nothing worth saying.`,
-      items: {
-        type: 'object',
-        properties: {
-          kind: {
-            type: 'string',
-            enum: ['friction', 'warning', 'opportunity'],
-            description:
-              'friction when it costs the visitor something now, warning when it undermines trust or coherence, opportunity when the page is fine and could be better.',
-          },
-          box: {
-            type: 'object',
-            description: `Tightest rectangle around the element, in pixels of the ${FRAME_W} by ${FRAME_H} frame.`,
-            properties: {
-              x: { type: 'integer' },
-              y: { type: 'integer' },
-              w: { type: 'integer' },
-              h: { type: 'integer' },
-            },
-            required: ['x', 'y', 'w', 'h'],
-            additionalProperties: false,
-          },
-          note: {
-            type: 'string',
-            description: 'Spoken over the page. About three lines.',
-          },
-          title: { type: 'string', description: 'Six words at most.' },
-          why: {
-            type: 'string',
-            description: 'The longer version, for when someone opens the note. Two or three sentences.',
-          },
-          fix: { type: 'string', description: 'One sentence. What you would actually do.' },
-          score: {
-            type: 'integer',
-            description: 'How much this costs them, 0 to 100.',
-          },
-        },
-        required: ['kind', 'box', 'note', 'title', 'why', 'fix', 'score'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['findings'],
-  additionalProperties: false,
-} as const;
+{"findings":[{"kind":"friction","box":{"x":0,"y":0,"w":0,"h":0},"title":"","note":"","why":"","fix":"","score":0}]}
 
-interface Finding {
-  kind: AuditPin['type'];
-  box: { x: number; y: number; w: number; h: number };
-  note: string;
-  title: string;
-  why: string;
-  fix: string;
-  score: number;
-}
+- findings: at most ${MAX_FINDINGS}, strongest first. Return an empty array if this screen genuinely has nothing worth saying.
+- kind: "friction" when it costs the visitor something now, "warning" when it undermines trust or coherence, "opportunity" when the page is fine and could be better.
+- box: the tightest rectangle around the element the note is about, in pixels of the ${FRAME_W} by ${FRAME_H} screenshot, origin top left. Box the element, not the section it sits in. A note whose box is a whole band of the page is a note nobody can act on.
+- title: six words at most.
+- note: what you say over the page, about three lines.
+- why: the longer version for when someone opens the note, two or three sentences.
+- fix: one sentence, what you would actually do.
+- score: how much this costs them, 0 to 100.`;
 
 /**
  * The measured facts, as a list the model can quote from.
@@ -152,9 +115,7 @@ function digest(audit: DomAudit): string {
       `At 390px wide the page overflows by ${audit.mobileOverflow}px${audit.mobileCulprit ? `, caused by a ${audit.mobileCulprit}` : ''}`,
     );
   if (audit.spacingBase)
-    say(
-      `Spacing follows a ${audit.spacingBase}px step ${Math.round(audit.spacingAdherence * 100)}% of the time`,
-    );
+    say(`Spacing follows a ${audit.spacingBase}px step ${Math.round(audit.spacingAdherence * 100)}% of the time`);
   else if (audit.commonSpacings.length)
     say(`No spacing step holds; ${audit.spacingSpread} distinct values, commonest ${audit.commonSpacings.join('px, ')}px`);
   if (audit.colourOutlier)
@@ -167,22 +128,82 @@ function digest(audit: DomAudit): string {
 }
 
 /** Pixels of the captured frame to the percentage, centre origin, box the overlay wants. */
-export function toRect(box: Finding['box']): Rect | null {
-  const w = (box.w / FRAME_W) * 100;
-  const h = (box.h / FRAME_H) * 100;
-  const x = ((box.x + box.w / 2) / FRAME_W) * 100;
-  const y = ((box.y + box.h / 2) / FRAME_H) * 100;
+export function toRect(box: unknown): Rect | null {
+  if (typeof box !== 'object' || box === null) return null;
+  const { x, y, w, h } = box as Record<string, unknown>;
+  if (![x, y, w, h].every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+
+  const width = ((w as number) / FRAME_W) * 100;
+  const height = ((h as number) / FRAME_H) * 100;
+  const cx = (((x as number) + (w as number) / 2) / FRAME_W) * 100;
+  const cy = (((y as number) + (h as number) / 2) / FRAME_H) * 100;
+
   /* A box the model placed outside the frame cannot be pointed at honestly. */
-  if (!(w > 0 && h > 0) || x <= 0.5 || x >= 99.5 || y <= 0.5 || y >= 99.5) return null;
-  return { x, y, w: Math.min(w, 96), h: Math.min(h, 96) };
+  if (!(width > 0 && height > 0)) return null;
+  if (cx <= 0.5 || cx >= 99.5 || cy <= 0.5 || cy >= 99.5) return null;
+  return { x: cx, y: cy, w: Math.min(width, 96), h: Math.min(height, 96) };
 }
 
-/** Set once, so the key is read at call time rather than at import time. */
-let client: Anthropic | null = null;
+const KINDS = new Set<AuditPin['type']>(['friction', 'warning', 'opportunity']);
 
-/** True when a model key is available, so callers know whether to expect judgement. */
-export const canJudge = () =>
-  Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+const line = (value: unknown, cap: number): string | null => {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text.length ? text.slice(0, cap) : null;
+};
+
+/**
+ * Turn one finding from the model into a note, or nothing.
+ *
+ * This endpoint has a JSON mode but no schema enforcement, so the shape is a
+ * request rather than a guarantee and every field is checked here. A note that
+ * arrives half formed is dropped rather than rendered half formed.
+ */
+export function toNote(raw: unknown, id: string, page: number): AuditPin | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const finding = raw as Record<string, unknown>;
+
+  const rect = toRect(finding.box);
+  if (!rect) return null;
+
+  const note = line(finding.note, 400);
+  const title = line(finding.title, 80);
+  if (!note || !title) return null;
+
+  const kind = finding.kind as AuditPin['type'];
+  const score = typeof finding.score === 'number' && Number.isFinite(finding.score) ? finding.score : 50;
+
+  return {
+    id,
+    x: rect.x,
+    y: rect.y,
+    w: rect.w,
+    h: rect.h,
+    type: KINDS.has(kind) ? kind : 'warning',
+    title,
+    description: line(finding.why, 600) ?? note,
+    suggestedFix: line(finding.fix, 300) ?? 'No fix suggested.',
+    impactScore: Math.round(Math.min(Math.max(score, 0), 100)),
+    note,
+    page,
+  };
+}
+
+/** Models fence JSON even when told not to. Take the object, wherever it sits. */
+function parseFindings(text: string): unknown[] {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return [];
+  try {
+    const { findings } = JSON.parse(text.slice(start, end + 1)) as { findings?: unknown };
+    return Array.isArray(findings) ? findings : [];
+  } catch {
+    return [];
+  }
+}
+
+/** True when a key is available, so callers know whether to expect judgement. */
+export const canJudge = () => Boolean(process.env.GLM_API_KEY);
 
 /**
  * Look at one captured page and say what is worth saying about it.
@@ -196,63 +217,52 @@ export async function judgePage(
   pageIndex: number,
 ): Promise<PageNotes | null> {
   if (!canJudge() || capture.audit.wall) return null;
-
-  const base64 = capture.screenshot.replace(/^data:image\/\w+;base64,/, '');
-  if (!base64 || base64 === capture.screenshot) return null;
-
-  client ??= new Anthropic();
+  /* Already a data URI from the capture, which is what image_url wants. */
+  if (!capture.screenshot.startsWith('data:image/')) return null;
 
   try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 4000,
-      system: BRIEF,
-      output_config: { format: { type: 'json_schema', schema: SCHEMA } },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-            {
-              type: 'text',
-              text: `This is ${capture.label} at ${FRAME_W} by ${FRAME_H}.\n\nMeasured on this page, and the only figures you may quote:\n${digest(capture.audit)}`,
-            },
-          ],
-        },
-      ],
+    const response = await fetch(`${ENDPOINT}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.GLM_API_KEY}`,
+        'content-type': 'application/json',
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: BRIEF },
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: capture.screenshot } },
+              {
+                type: 'text',
+                text: `This is ${capture.label} at ${FRAME_W} by ${FRAME_H}.\n\nMeasured on this page, and the only figures you may quote:\n${digest(capture.audit)}`,
+              },
+            ],
+          },
+        ],
+      }),
     });
 
-    if (response.stop_reason === 'refusal' || response.stop_reason === 'max_tokens') return null;
+    if (!response.ok) return null;
 
-    const text = response.content.find((block) => block.type === 'text');
-    if (!text || text.type !== 'text') return null;
+    const body = (await response.json()) as {
+      choices?: { message?: { content?: unknown } }[];
+    };
+    const content = body.choices?.[0]?.message?.content;
+    if (typeof content !== 'string') return null;
 
-    const { findings } = JSON.parse(text.text) as { findings: Finding[] };
-    const notes: AuditPin[] = [];
-    const says: string[] = [];
+    const notes = parseFindings(content)
+      .slice(0, MAX_FINDINGS)
+      .map((finding, order) => toNote(finding, `p${pageIndex}-j${order}`, pageIndex))
+      .filter((note): note is AuditPin => note !== null);
 
-    findings.slice(0, MAX_FINDINGS).forEach((finding, order) => {
-      const rect = toRect(finding.box);
-      if (!rect) return;
-      notes.push({
-        id: `p${pageIndex}-j${order}`,
-        x: rect.x,
-        y: rect.y,
-        w: rect.w,
-        h: rect.h,
-        type: finding.kind,
-        title: finding.title,
-        description: finding.why,
-        suggestedFix: finding.fix,
-        impactScore: Math.round(Math.min(Math.max(finding.score, 0), 100)),
-        note: finding.note,
-        page: pageIndex,
-      });
-      says.push(finding.note);
-    });
-
-    /* Nothing anchorable came back, so the measured rules are the better answer. */
-    return notes.length ? { notes, says } : null;
+    /* Nothing usable came back, so the measured rules are the better answer. */
+    return notes.length ? { notes, says: notes.map((note) => note.note as string) } : null;
   } catch {
     return null;
   }

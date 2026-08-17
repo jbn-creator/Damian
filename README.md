@@ -58,15 +58,25 @@ Two layers, and the second is optional.
 invents nothing. Every rule carries a weight: what a visitor would feel gets
 spoken over the page, and design system hygiene only reaches the board.
 
-`lib/judge.ts` is judgement. Set `ANTHROPIC_API_KEY` and each captured screen
-goes to a vision model along with every measurement already taken, and the
-model decides what is worth saying: whether the theme coheres, whether the page
-reads as generated, whether the primary action is actually clear, where
-structure rather than styling is the problem. Nothing in the brief enumerates
-findings for it, because a list of findings to look for is the rule engine
-again. The measurements are passed in as the only figures it may quote, so a
-number in a note is still a number somebody measured. Without a key, or if the
-call fails, the rules answer instead.
+`lib/judge.ts` is judgement. Set `GLM_API_KEY` and each captured screen goes to
+a vision model along with every measurement already taken, and the model
+decides what is worth saying: whether the theme coheres, whether the page reads
+as generated, whether the primary action is actually clear, where structure
+rather than styling is the problem. Nothing in the brief enumerates findings for
+it, because a list of findings to look for is the rule engine again. The
+measurements are passed in as the only figures it may quote, so a number in a
+note is still a number somebody measured. Without a key, or if the call fails,
+the rules answer instead.
+
+It talks to any OpenAI shaped chat endpoint and defaults to Z.ai's `glm-5v-turbo`.
+The model has to be one that takes images. `glm-5.2` is the stronger reasoner
+but is text only, so it would be judging a description of the page rather than
+the page, and every question above is a question about what the page looks like.
+
+The endpoint has a JSON mode but no schema enforcement, so the reply shape is a
+request rather than a guarantee. Every field is validated on arrival and a
+finding that is missing a box or a line is dropped rather than rendered half
+formed. That is what `lib/judge.test.ts` covers: `node lib/judge.test.ts`.
 
 ## Design system
 
