@@ -848,10 +848,15 @@ export interface SignInResult {
 
 /** Boot one browser and keep it for the whole walk. */
 interface LoginProbe {
-  form: boolean;
+  /** A visible password field, marked and ready to fill. */
+  pass: boolean;
+  /** A visible field to put a username or email in, marked and ready to fill. */
   user: boolean;
   submit: boolean;
+  /** A link that leads to a sign in, when this page is not one. */
   link: string | null;
+  /** Cross document frames on the page, which a page level script cannot read. */
+  frames: number;
   url: string;
 }
 
@@ -876,34 +881,59 @@ const LOGIN_SCRIPT = `JSON.stringify((() => {
     const r = el.getBoundingClientRect();
     return r.width > 8 && r.height > 8;
   };
+  /* Marks from an earlier probe may sit on nodes this render has replaced. */
+  ['data-damian-user', 'data-damian-pass', 'data-damian-submit'].forEach((mark) => {
+    document.querySelectorAll('[' + mark + ']').forEach((el) => el.removeAttribute(mark));
+  });
+
   const skip = ['hidden', 'checkbox', 'radio', 'submit', 'button', 'file', 'range'];
-  const pass = [...document.querySelectorAll('input[type=password]')].filter(vis)[0];
+  const pass = [...document.querySelectorAll('input[type=password]')].filter(vis)[0] || null;
 
-  if (pass) {
-    const form = pass.closest('form') || document.body;
-    const others = [...form.querySelectorAll('input')].filter(
-      (el) => el !== pass && vis(el) && skip.indexOf(el.type) === -1,
-    );
-    const named = others.filter((el) => ['email', 'text', 'tel'].indexOf(el.type) !== -1);
-    const user = named[0] || others[0] || null;
-    if (user) user.setAttribute('data-damian-user', '1');
-    pass.setAttribute('data-damian-pass', '1');
-    const submit = [...form.querySelectorAll('button, input[type=submit]')].filter(vis)[0];
-    if (submit) submit.setAttribute('data-damian-submit', '1');
-    return { form: true, user: Boolean(user), submit: Boolean(submit), link: null, url: location.href };
+  /*
+   * The scope for finding the username is the password field's form when there
+   * is one, and the page when there is not. A page asking for an email before
+   * it will show a password field is the commonest sign in there is, so a
+   * username on its own is a real finding rather than a failure.
+   */
+  const scope = (pass && pass.closest('form')) || document.body;
+  const fields = [...scope.querySelectorAll('input')].filter(
+    (el) => el !== pass && vis(el) && skip.indexOf(el.type) === -1,
+  );
+  const named = fields.filter(
+    (el) =>
+      ['email', 'text', 'tel'].indexOf(el.type) !== -1 &&
+      (el.autocomplete || '').indexOf('one-time') === -1,
+  );
+  const user = named[0] || fields[0] || null;
+
+  if (user) user.setAttribute('data-damian-user', '1');
+  if (pass) pass.setAttribute('data-damian-pass', '1');
+
+  const submit = [...scope.querySelectorAll('button, input[type=submit]')].filter(vis)[0] || null;
+  if (submit) submit.setAttribute('data-damian-submit', '1');
+
+  /* Only bother looking for the door if we are plainly not standing at it. */
+  let link = null;
+  if (!pass && !user) {
+    const words = ['log in', 'login', 'sign in', 'signin', 'log-in', 'sign-in', 'account'];
+    const hit = (text, href) =>
+      words.some(
+        (w) => text === w || text.indexOf(w) === 0 || href.indexOf(w.split(' ').join('')) !== -1,
+      );
+    for (const a of document.querySelectorAll('a[href]')) {
+      const text = (a.innerText || '').toLowerCase().trim();
+      if (hit(text, (a.getAttribute('href') || '').toLowerCase())) { link = a.href; break; }
+    }
   }
 
-  const words = ['log in', 'login', 'sign in', 'signin', 'log-in', 'sign-in'];
-  for (const a of document.querySelectorAll('a[href]')) {
-    const text = (a.innerText || '').toLowerCase().trim();
-    const href = (a.getAttribute('href') || '').toLowerCase();
-    const hit = words.some(
-      (w) => text === w || text.indexOf(w) === 0 || href.indexOf(w.split(' ').join('')) !== -1,
-    );
-    if (hit) return { form: false, user: false, submit: false, link: a.href, url: location.href };
-  }
-
-  return { form: false, user: false, submit: false, link: null, url: location.href };
+  return {
+    pass: Boolean(pass),
+    user: Boolean(user),
+    submit: Boolean(submit),
+    link,
+    frames: document.querySelectorAll('iframe').length,
+    url: location.href,
+  };
 })())`;
 
 /*
@@ -1341,21 +1371,44 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
      */
     const signIn = async (credentials: TestCredentials): Promise<SignInResult> => {
       try {
-        let door = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+        /*
+         * Wait for the form, do not sleep and hope.
+         *
+         * A sign in page that renders client side is not there 800ms after the
+         * navigation, and probing once on a timer meant the commonest kind of
+         * login page in existence reported no form and got walked past. So the
+         * page is asked repeatedly until it has what we need or the budget runs
+         * out, and the budget is the only thing that decides we have failed.
+         */
+        const probeUntil = async (
+          want: (probe: LoginProbe) => boolean,
+          budget = 8000,
+        ): Promise<LoginProbe> => {
+          const deadline = Date.now() + budget;
+          let probe = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+          while (!want(probe) && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 400));
+            probe = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+          }
+          return probe;
+        };
 
-        /* Not on this page, but something here points at it. */
-        if (!door.form && door.link) {
+        let door = await probeUntil((probe) => probe.pass || probe.user, 2500);
+
+        /* Not standing at the door, but something here points at it. */
+        if (!door.pass && !door.user && door.link) {
           const clicked = await clickLink(door.link);
           if (!clicked) await goto(door.link);
-          await new Promise((r) => setTimeout(r, 800));
-          door = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+          door = await probeUntil((probe) => probe.pass || probe.user);
         }
 
-        if (!door.form) {
-          return { ok: false, evidence: 'I could not find anywhere to sign in, so this is the public side only.' };
-        }
-        if (!door.user) {
-          return { ok: false, evidence: 'I found a password box with no username field beside it, so I left it alone.' };
+        if (!door.pass && !door.user) {
+          return door.frames > 0
+            ? {
+                ok: false,
+                evidence: 'The sign in is inside an embedded frame I cannot type into, so this is the public side only.',
+              }
+            : { ok: false, evidence: 'I could not find anywhere to sign in, so this is the public side only.' };
         }
 
         const before = door.url;
@@ -1374,19 +1427,18 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
           await new Promise((r) => setTimeout(r, 180));
         };
 
-        await fill('data-damian-user', credentials.username);
-        await fill('data-damian-pass', credentials.password);
-
-        if (door.submit) {
-          await evaluate<boolean>(
-            `JSON.stringify((() => {
-              const el = document.querySelector('[data-damian-submit]');
-              if (!el) return false;
-              el.click();
-              return true;
-            })())`,
-          );
-        } else {
+        const submit = async (hasButton: boolean) => {
+          if (hasButton) {
+            const pressed = await evaluate<boolean>(
+              `JSON.stringify((() => {
+                const el = document.querySelector('[data-damian-submit]');
+                if (!el) return false;
+                el.click();
+                return true;
+              })())`,
+            );
+            if (pressed) return;
+          }
           /* No button to press, so submit the way a keyboard would. */
           for (const type of ['keyDown', 'keyUp']) {
             await send('Input.dispatchKeyEvent', {
@@ -1397,7 +1449,29 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
               nativeVirtualKeyCode: 13,
             });
           }
+        };
+
+        if (door.user) await fill('data-damian-user', credentials.username);
+
+        /*
+         * Email first, password on the next screen. Most hosted sign ins work
+         * this way, so a page offering a username and no password is a step in
+         * the flow rather than the end of it. Send the username and wait for the
+         * password field to appear.
+         */
+        if (!door.pass) {
+          await submit(door.submit);
+          door = await probeUntil((probe) => probe.pass);
+          if (!door.pass) {
+            return {
+              ok: false,
+              evidence: 'It took the username and never asked for a password, so I could not get in.',
+            };
+          }
         }
+
+        await fill('data-damian-pass', credentials.password);
+        await submit(door.submit);
 
         /* Give the round trip a chance, then look rather than assume. */
         let after = await evaluate<VerifyProbe>(VERIFY_SCRIPT);
@@ -1554,6 +1628,12 @@ export async function* crawl(
       if (credentials) {
         const result = await session.signIn(credentials);
         push({ type: 'auth', ...result });
+        /*
+         * A sign in that did not work leaves us standing on the login screen,
+         * and walking a product from its login screen is worse than not trying
+         * at all. Go back to what we were handed and cover the public side.
+         */
+        if (!result.ok) await session.goto(entry.href);
       }
 
       /*
