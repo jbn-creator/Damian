@@ -1,5 +1,5 @@
 import type { DomAudit, PageCapture, Rect } from './capture';
-import type { AuditPin } from './types';
+import type { AuditPin, ProductIdea } from './types';
 import type { PageNotes } from './findings';
 
 /**
@@ -52,10 +52,13 @@ const TIMEOUT_MS = 90_000;
  */
 const BRIEF = `You are Damian. You look at one screen of a real website and say what you would change, the way a senior product designer says it standing behind someone rather than the way an audit report writes it.
 
-Who you are talking to: the person who built this and is about to show it to customers or investors. Their fear is that it looks generated, generic, or unconsidered, and that visitors will not do the thing the page is asking for.
+Who you are talking to: one person who built this themselves, on their own time, and needs people to like it enough to come back. Not an enterprise with a design team. Their fear is that it looks generated, generic, or unconsidered, and that visitors will pass through once and never return.
+
+So the question behind every note is whether this screen earns a visitor's trust and gives them a reason to stay. Polish that no one would notice is not worth their evening.
 
 What earns a note:
 - Something a visitor would actually feel. Confusion about what to press, a claim they cannot believe, copy they cannot read, a path that dead ends.
+- Something that would make someone leave and not come back, or something small that would make them stay.
 - Something that reads as machine generated or template default rather than designed for this product. Say so plainly and say what gives it away.
 - A theme that does not hold together. A colour, a corner radius, a shadow, a typeface, a density that belongs to a different page than the one it is on.
 - A pattern broken so badly it is jarring, not a few pixels of drift. If you would have to measure it to notice, it does not go here.
@@ -74,16 +77,52 @@ Voice: second person, present tense, about three lines per note, no em dashes, n
 
 Reply with JSON only, in exactly this shape and nothing else:
 
-{"findings":[{"kind":"friction","box":{"x":0,"y":0,"w":0,"h":0},"title":"","note":"","why":"","fix":"","score":0}]}
+{"findings":[{"kind":"friction","anchor":"headline","box":{"x":0,"y":0,"w":0,"h":0},"title":"","note":"","why":"","fix":"","score":0}]}
 
 - findings: at most ${MAX_FINDINGS}, strongest first. Return an empty array if this screen genuinely has nothing worth saying.
 - kind: "friction" when it costs the visitor something now, "warning" when it undermines trust or coherence, "opportunity" when the page is fine and could be better.
-- box: the tightest rectangle around the element the note is about, in pixels of the ${FRAME_W} by ${FRAME_H} screenshot, origin top left. Box the element, not the section it sits in. A note whose box is a whole band of the page is a note nobody can act on.
+- anchor: when the note is about one of the measured elements listed below, give its name here and leave box out. Those rectangles were measured in the page, so they are exact and yours would not be.
+- box: only when the note is about something that is not in that list. The tightest rectangle around the element, in pixels of the ${FRAME_W} by ${FRAME_H} screenshot, origin top left. Box the element, not the section it sits in. A note whose box is a whole band of the page is a note nobody can act on.
 - title: six words at most.
 - note: what you say over the page, about three lines.
 - why: the longer version for when someone opens the note, two or three sentences.
 - fix: one sentence, what you would actually do.
 - score: how much this costs them, 0 to 100.`;
+
+/**
+ * Elements the DOM pass already has exact rectangles for.
+ *
+ * A vision model estimating a box by eye lands close and not on it, so a note
+ * frames the neighbourhood of the thing rather than the thing. These are the
+ * boxes measured in the page, offered by name. When a finding is about one of
+ * them the model names it and the rectangle is used verbatim, which is exact by
+ * construction. Estimating is the fallback, not the default.
+ */
+function anchorsFor(audit: DomAudit): Map<string, Rect> {
+  const found = new Map<string, Rect>();
+  const offer = (name: string, box: Rect | null | undefined) => {
+    if (box && box.w > 0 && box.h > 0) found.set(name, box);
+  };
+
+  offer('headline', audit.h1Box);
+  offer('form', audit.formBox);
+  offer('competing-actions', audit.competingActions?.box);
+  offer('first-real-button', audit.actionBelowFold?.box);
+  offer('smallest-copy', audit.smallText?.box);
+  offer('widest-text', audit.longLine?.box);
+  offer('lowest-contrast-text', audit.worstContrast?.box);
+  offer('off-palette-control', audit.colourOutlier?.box);
+  offer('smallest-control', audit.tinyTapBox);
+  offer('overflowing-element', audit.mobileCulpritBox);
+  offer('image-without-alt', audit.missingAltBox);
+  offer('main-content', audit.structureBox);
+
+  return found;
+}
+
+/** Centre percentages back to the pixel rectangle the model is looking at. */
+const asPixels = (box: Rect) =>
+  `${Math.round(((box.x - box.w / 2) / 100) * FRAME_W)},${Math.round(((box.y - box.h / 2) / 100) * FRAME_H)} ${Math.round((box.w / 100) * FRAME_W)}x${Math.round((box.h / 100) * FRAME_H)}`;
 
 /**
  * The measured facts, as a list the model can quote from.
@@ -159,11 +198,22 @@ const line = (value: unknown, cap: number): string | null => {
  * request rather than a guarantee and every field is checked here. A note that
  * arrives half formed is dropped rather than rendered half formed.
  */
-export function toNote(raw: unknown, id: string, page: number): AuditPin | null {
+export function toNote(
+  raw: unknown,
+  id: string,
+  page: number,
+  anchors: Map<string, Rect> = new Map(),
+): AuditPin | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const finding = raw as Record<string, unknown>;
 
-  const rect = toRect(finding.box);
+  /*
+   * A measured rectangle beats an estimated one every time, so the named
+   * anchor wins and the model's own box is only read when it named nothing
+   * that was actually offered.
+   */
+  const named = typeof finding.anchor === 'string' ? anchors.get(finding.anchor) : undefined;
+  const rect = named ?? toRect(finding.box);
   if (!rect) return null;
 
   const note = line(finding.note, 400);
@@ -190,15 +240,49 @@ export function toNote(raw: unknown, id: string, page: number): AuditPin | null 
 }
 
 /** Models fence JSON even when told not to. Take the object, wherever it sits. */
-function parseFindings(text: string): unknown[] {
+function parseList(text: string, key: string): unknown[] {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end <= start) return [];
   try {
-    const { findings } = JSON.parse(text.slice(start, end + 1)) as { findings?: unknown };
-    return Array.isArray(findings) ? findings : [];
+    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    return Array.isArray(parsed[key]) ? (parsed[key] as unknown[]) : [];
   } catch {
     return [];
+  }
+}
+
+/** One request to the endpoint. Returns the reply text, or null on any trouble. */
+async function ask(
+  system: string,
+  content: unknown[],
+  maxTokens: number,
+): Promise<string | null> {
+  try {
+    const response = await fetch(`${ENDPOINT}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.GLM_API_KEY}`,
+        'content-type': 'application/json',
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content },
+        ],
+      }),
+    });
+
+    if (!response.ok) return null;
+    const body = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+    const reply = body.choices?.[0]?.message?.content;
+    return typeof reply === 'string' ? reply : null;
+  } catch {
+    return null;
   }
 }
 
@@ -220,50 +304,139 @@ export async function judgePage(
   /* Already a data URI from the capture, which is what image_url wants. */
   if (!capture.screenshot.startsWith('data:image/')) return null;
 
-  try {
-    const response = await fetch(`${ENDPOINT}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${process.env.GLM_API_KEY}`,
-        'content-type': 'application/json',
+  const anchors = anchorsFor(capture.audit);
+  const offered = [...anchors]
+    .map(([name, box]) => `- ${name}: at ${asPixels(box)}`)
+    .join('\n');
+
+  const reply = await ask(
+    BRIEF,
+    [
+      { type: 'image_url', image_url: { url: capture.screenshot } },
+      {
+        type: 'text',
+        text: `This is ${capture.label} at ${FRAME_W} by ${FRAME_H}.
+
+Measured elements you can name as an anchor, with where each one sits:
+${offered || '- none measured on this page'}
+
+Measured on this page, and the only figures you may quote:
+${digest(capture.audit)}`,
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 4000,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: BRIEF },
-          {
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: { url: capture.screenshot } },
-              {
-                type: 'text',
-                text: `This is ${capture.label} at ${FRAME_W} by ${FRAME_H}.\n\nMeasured on this page, and the only figures you may quote:\n${digest(capture.audit)}`,
-              },
-            ],
-          },
-        ],
-      }),
+    ],
+    4000,
+  );
+  if (!reply) return null;
+
+  const notes = parseList(reply, 'findings')
+    .slice(0, MAX_FINDINGS)
+    .map((finding, order) => toNote(finding, `p${pageIndex}-j${order}`, pageIndex, anchors))
+    .filter((note): note is AuditPin => note !== null);
+
+  /* Nothing usable came back, so the measured rules are the better answer. */
+  return notes.length ? { notes, says: notes.map((note) => note.note as string) } : null;
+}
+
+/**
+ * What this product should build, cut, or charge for.
+ *
+ * Separate from the per page notes on purpose. A note is about a screen; this
+ * is about the product, and it needs to have seen the whole walk before it can
+ * say anything worth hearing. It runs once, after the walk, so it costs one
+ * call and slows nothing down.
+ */
+const PRODUCT_BRIEF = `You have just walked a whole product. You are advising the one person who built it, on their own time, and who needs users to like it enough to come back. Judge the product, not the pixels.
+
+The question you are answering is: what should they build next, what should they stop building, and what would make someone choose this over the alternative and then keep using it.
+
+Be willing to tell them to cut things. A solo builder's scarcest resource is evenings, and a feature that duplicates something users can already do elsewhere is worse than nothing, because it costs maintenance and dilutes what the product is for. If you see one, say so plainly, say why the alternative wins, and name what they should build with that time instead.
+
+For example, an internship platform with a built in CV generator: people already write CVs in tools they trust, that feature will never be the reason anyone picks this, and the same effort spent on tracking which applications got replies would be. That is the shape of advice you are giving.
+
+Bias toward the reasons people come back rather than the reasons they arrive once. What gets better the more they use it, what they would lose by leaving, what would make them tell someone else, what brings them back without an email. A single thing done well beats four half things.
+
+Ground every recommendation in something actually on the pages you saw. Never propose a feature for a product this evidently is not. Never invent a figure, a user count, or a conversion number.
+
+No em dashes, no en dashes, no double hyphens. Second person, plain speech.
+
+Reply with JSON only, in exactly this shape and nothing else:
+
+{"ideas":[{"category":"missing_feature","title":"","problem":"","solution":"","impact":"High","effort":"1d"}]}
+
+- ideas: 3 to 6, most valuable first.
+- category: "missing_feature" for something to build, "quick_win" for something to change or cut this week, "monetization" for where this could reasonably ask for money.
+- title: eight words at most, an instruction rather than a topic.
+- problem: what is true today and why it costs them users, two or three sentences, referring to what you saw.
+- solution: what to do instead, concretely enough to start on tomorrow.
+- impact: "High", "Medium" or "Low".
+- effort: a rough span for one person, like "2h", "1d" or "1w".`;
+
+const IMPACTS = new Set<ProductIdea['impact']>(['High', 'Medium', 'Low']);
+const CATEGORIES = new Set<ProductIdea['category']>([
+  'quick_win',
+  'missing_feature',
+  'monetization',
+]);
+
+/** Same defensive read as the notes: no schema is enforced, so nothing is trusted. */
+export function toIdea(raw: unknown, id: string): ProductIdea | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const idea = raw as Record<string, unknown>;
+
+  const title = line(idea.title, 90);
+  const problem = line(idea.problem, 600);
+  const solution = line(idea.solution, 600);
+  if (!title || !problem || !solution) return null;
+
+  const category = idea.category as ProductIdea['category'];
+  const impact = idea.impact as ProductIdea['impact'];
+
+  return {
+    id,
+    category: CATEGORIES.has(category) ? category : 'missing_feature',
+    title,
+    description: problem,
+    solution,
+    impact: IMPACTS.has(impact) ? impact : 'Medium',
+    effort: line(idea.effort, 12) ?? '1d',
+  };
+}
+
+/**
+ * Ask what the product should become, having seen every page.
+ *
+ * Returns null when there is no key or nothing usable came back, and the caller
+ * falls back to the measured quick wins.
+ */
+export async function judgeWalk(captures: PageCapture[]): Promise<ProductIdea[] | null> {
+  if (!canJudge()) return null;
+
+  /* A gate is not the product, so a walled page tells us nothing about it. */
+  const seen = captures.filter(
+    (capture) => !capture.audit.wall && capture.screenshot.startsWith('data:image/'),
+  );
+  if (seen.length === 0) return null;
+
+  const content: unknown[] = [];
+  seen.forEach((capture) => {
+    content.push({ type: 'image_url', image_url: { url: capture.screenshot } });
+    content.push({
+      type: 'text',
+      text: `Above is ${capture.label} (${capture.audit.title}).\n${digest(capture.audit)}`,
     });
+  });
+  content.push({
+    type: 'text',
+    text: `That is ${seen.length} ${seen.length === 1 ? 'page' : 'pages'} of this product. Now say what they should build, cut, or charge for.`,
+  });
 
-    if (!response.ok) return null;
+  const reply = await ask(PRODUCT_BRIEF, content, 4000);
+  if (!reply) return null;
 
-    const body = (await response.json()) as {
-      choices?: { message?: { content?: unknown } }[];
-    };
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== 'string') return null;
+  const ideas = parseList(reply, 'ideas')
+    .slice(0, 6)
+    .map((idea, order) => toIdea(idea, `idea-j${order}`))
+    .filter((idea): idea is ProductIdea => idea !== null);
 
-    const notes = parseFindings(content)
-      .slice(0, MAX_FINDINGS)
-      .map((finding, order) => toNote(finding, `p${pageIndex}-j${order}`, pageIndex))
-      .filter((note): note is AuditPin => note !== null);
-
-    /* Nothing usable came back, so the measured rules are the better answer. */
-    return notes.length ? { notes, says: notes.map((note) => note.note as string) } : null;
-  } catch {
-    return null;
-  }
+  return ideas.length ? ideas : null;
 }

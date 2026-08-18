@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toNote, toRect } from './judge.ts';
+import { toIdea, toNote, toRect } from './judge.ts';
 
 /**
  * The two things here that fail silently.
@@ -77,5 +77,56 @@ assert.equal(toNote({ ...whole, note: '   ' }, 'x', 0), null);
 assert.equal(toNote({ ...whole, title: 42 }, 'x', 0), null);
 assert.equal(toNote('a note', 'x', 0), null);
 assert.equal(toNote(null, 'x', 0), null);
+
+/*
+ * Anchors. A rectangle the DOM measured is exact and one the model estimated is
+ * not, so a named anchor has to win outright. If this ever inverts, every note
+ * silently goes back to framing the neighbourhood of its subject.
+ */
+const measured = { x: 12, y: 34, w: 5, h: 6 };
+const anchors = new Map([['headline', measured]]);
+
+const byName = toNote({ ...whole, anchor: 'headline' }, 'x', 0, anchors);
+assert.ok(byName);
+assert.deepEqual({ x: byName.x, y: byName.y, w: byName.w, h: byName.h }, measured);
+
+/* Even when the model also sent a box of its own, the measured one is used. */
+const both = toNote({ ...whole, anchor: 'headline', box: { x: 0, y: 0, w: 1400, h: 880 } }, 'x', 0, anchors);
+assert.deepEqual({ x: both?.x, y: both?.y }, { x: measured.x, y: measured.y });
+
+/* An anchor nobody offered falls through to the estimate rather than vanishing. */
+const invented = toNote({ ...whole, anchor: 'the vibe' }, 'x', 0, anchors);
+assert.ok(invented);
+assert.equal(invented.x, 50);
+
+/* No anchor and no box is nowhere to point. */
+assert.equal(toNote({ ...whole, anchor: 'the vibe', box: undefined }, 'x', 0, anchors), null);
+
+const idea = {
+  category: 'missing_feature',
+  title: 'Show which applications got replies',
+  problem: 'Nothing on these pages tells a returning user what changed.',
+  solution: 'Track reply state per application and surface it on the dashboard.',
+  impact: 'High',
+  effort: '1w',
+};
+
+const built = toIdea(idea, 'idea-j0');
+assert.ok(built);
+assert.equal(built.category, 'missing_feature');
+assert.equal(built.impact, 'High');
+assert.equal(built.description, idea.problem); // the card reads problem as description
+assert.equal(built.effort, '1w');
+
+/* Categories and impacts drive grouping and colour, so neither may be freeform. */
+assert.equal(toIdea({ ...idea, category: 'growth_hack' }, 'x')?.category, 'missing_feature');
+assert.equal(toIdea({ ...idea, impact: 'Huge' }, 'x')?.impact, 'Medium');
+assert.equal(toIdea({ ...idea, effort: undefined }, 'x')?.effort, '1d');
+
+/* An idea with no problem or no solution is half an idea, so it is dropped. */
+assert.equal(toIdea({ ...idea, problem: '' }, 'x'), null);
+assert.equal(toIdea({ ...idea, solution: null }, 'x'), null);
+assert.equal(toIdea({ ...idea, title: undefined }, 'x'), null);
+assert.equal(toIdea(null, 'x'), null);
 
 console.log('judge: ok');

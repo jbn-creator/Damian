@@ -1,6 +1,6 @@
 import { crawl, findChrome, type PageCapture } from '@/lib/capture';
 import { analysePage, summarise } from '@/lib/findings';
-import { canJudge, judgePage } from '@/lib/judge';
+import { judgePage, judgeWalk } from '@/lib/judge';
 
 /* Chrome is spawned per request, so this cannot run on the edge. */
 export const runtime = 'nodejs';
@@ -117,7 +117,15 @@ export async function POST(request: Request) {
         if (captures.length === 0) {
           emit({ type: 'error', error: 'Damian could not open that page.' });
         } else {
-          emit({ type: 'done', ...summarise(captures) });
+          /*
+           * The board is about the product rather than the pixels, so it is
+           * asked once, here, with the whole walk in view. A single page cannot
+           * tell you what to build next. The measured quick wins stand in when
+           * there is no model or nothing usable comes back.
+           */
+          const measured = summarise(captures);
+          const ideas = await judgeWalk(captures);
+          emit({ type: 'done', ...measured, ideas: ideas ?? measured.ideas });
         }
       } catch (error) {
         const message =

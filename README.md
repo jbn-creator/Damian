@@ -73,10 +73,24 @@ The model has to be one that takes images. `glm-5.2` is the stronger reasoner
 but is text only, so it would be judging a description of the page rather than
 the page, and every question above is a question about what the page looks like.
 
+Boxes are not left to the model's eye. Every rectangle the DOM pass measured is
+offered to it by name, and when a note is about one of them the measured
+rectangle is used verbatim, so the note frames the element rather than its
+neighbourhood. Estimating a box is the fallback for things the DOM pass never
+measured.
+
+The board is a second, separate question, asked once after the walk with every
+page in view: what should this product build, cut, or charge for. It is aimed at
+one person building something on their own time who needs users to come back, so
+it will tell you to drop a feature that duplicates a tool people already trust
+and spend the evening on the thing that would bring them back instead. A single
+page cannot answer that, which is why it is not part of the per page pass.
+
 The endpoint has a JSON mode but no schema enforcement, so the reply shape is a
 request rather than a guarantee. Every field is validated on arrival and a
-finding that is missing a box or a line is dropped rather than rendered half
-formed. That is what `lib/judge.test.ts` covers: `node lib/judge.test.ts`.
+finding missing a box or a line, or an idea missing its problem or its solution,
+is dropped rather than rendered half formed. That is what `lib/judge.test.ts`
+covers: `node lib/judge.test.ts`.
 
 ## Design system
 
