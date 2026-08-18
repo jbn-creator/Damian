@@ -64,6 +64,7 @@ What earns a note:
 - A pattern broken so badly it is jarring, not a few pixels of drift. If you would have to measure it to notice, it does not go here.
 - A place where structure is the problem rather than styling. A stack that should be a comparison, a wall of prose that should be three cards, an action buried where nobody scrolls.
 - A place where a specific number, or motion on a specific element, would carry the point better than what is there now.
+- A specific interface element that would be better as something else. A dropdown of four options that should be four buttons, a date typed by hand that should be a picker, a table that should be cards on this width, a wall of fields that should be two steps, a state with nothing in it and nothing to do about that. Name the element and name what it should become.
 
 What does not earn a note:
 - Anything a linter would catch. Missing alt attributes, heading order, near duplicate tokens.

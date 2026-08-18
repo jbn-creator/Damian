@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { TestCredentials } from './types';
 
 /**
  * Real capture, driven over the Chrome DevTools Protocol against whatever
@@ -115,6 +116,7 @@ export type CrawlEvent =
   | { type: 'frame'; frame: string }
   | { type: 'page'; capture: PageCapture }
   | { type: 'move'; label: string; clicked: boolean }
+  | { type: 'auth'; ok: boolean; evidence: string }
   | { type: 'plan'; pages: string[] };
 
 /**
@@ -832,10 +834,103 @@ interface Session {
   scrollThrough: () => Promise<void>;
   /** Check the page at phone width, then put the viewport back. */
   measureMobile: () => Promise<{ px: number; culprit: string | null }>;
+  /** Find a sign in, fill it, submit it, and say honestly whether it worked. */
+  signIn: (credentials: TestCredentials) => Promise<SignInResult>;
   close: () => Promise<void>;
 }
 
+/** What came of trying to sign in. Reported either way, never assumed. */
+export interface SignInResult {
+  ok: boolean;
+  /** Plain speech, for the feed. Never contains the credentials. */
+  evidence: string;
+}
+
 /** Boot one browser and keep it for the whole walk. */
+interface LoginProbe {
+  form: boolean;
+  user: boolean;
+  submit: boolean;
+  link: string | null;
+  url: string;
+}
+
+interface VerifyProbe {
+  pass: number;
+  out: boolean;
+  err: boolean;
+  url: string;
+}
+
+/*
+ * Find the door.
+ *
+ * A password input is the only reliable tell that a form is a sign in, so it is
+ * the anchor: whatever text box sits with it is the username. If there is no
+ * password box on this page, look for the link that leads to one. Deliberately
+ * no regular expressions in here, because a single backslash in a template
+ * literal has silently broken an injected script in this file twice.
+ */
+const LOGIN_SCRIPT = `JSON.stringify((() => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 8 && r.height > 8;
+  };
+  const skip = ['hidden', 'checkbox', 'radio', 'submit', 'button', 'file', 'range'];
+  const pass = [...document.querySelectorAll('input[type=password]')].filter(vis)[0];
+
+  if (pass) {
+    const form = pass.closest('form') || document.body;
+    const others = [...form.querySelectorAll('input')].filter(
+      (el) => el !== pass && vis(el) && skip.indexOf(el.type) === -1,
+    );
+    const named = others.filter((el) => ['email', 'text', 'tel'].indexOf(el.type) !== -1);
+    const user = named[0] || others[0] || null;
+    if (user) user.setAttribute('data-damian-user', '1');
+    pass.setAttribute('data-damian-pass', '1');
+    const submit = [...form.querySelectorAll('button, input[type=submit]')].filter(vis)[0];
+    if (submit) submit.setAttribute('data-damian-submit', '1');
+    return { form: true, user: Boolean(user), submit: Boolean(submit), link: null, url: location.href };
+  }
+
+  const words = ['log in', 'login', 'sign in', 'signin', 'log-in', 'sign-in'];
+  for (const a of document.querySelectorAll('a[href]')) {
+    const text = (a.innerText || '').toLowerCase().trim();
+    const href = (a.getAttribute('href') || '').toLowerCase();
+    const hit = words.some(
+      (w) => text === w || text.indexOf(w) === 0 || href.indexOf(w.split(' ').join('')) !== -1,
+    );
+    if (hit) return { form: false, user: false, submit: false, link: a.href, url: location.href };
+  }
+
+  return { form: false, user: false, submit: false, link: null, url: location.href };
+})())`;
+
+/*
+ * Did it work.
+ *
+ * A password box still on screen is the strongest no. An error phrase is the
+ * next strongest. A way to sign out is the clearest yes. Anything else is
+ * ambiguous and gets reported as ambiguous rather than claimed as success.
+ */
+const VERIFY_SCRIPT = `JSON.stringify((() => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 8 && r.height > 8;
+  };
+  const body = (document.body.innerText || '').toLowerCase();
+  const any = (list) => list.some((w) => body.indexOf(w) !== -1);
+  return {
+    pass: [...document.querySelectorAll('input[type=password]')].filter(vis).length,
+    out: any(['log out', 'logout', 'sign out', 'signout', 'my account', 'your account']),
+    err: any([
+      'incorrect', 'invalid', 'wrong password', 'try again', 'does not match',
+      'not recognised', 'not recognized', 'no account', 'failed to sign',
+    ]),
+    url: location.href,
+  };
+})())`;
+
 async function openSession(onFrame?: (frame: string) => void): Promise<Session> {
   const binary = findChrome();
   if (!binary) throw new Error('NO_CHROME');
@@ -1228,7 +1323,105 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       }
     };
 
-    return { send, evaluate, goto, clickLink, scrollThrough, measureMobile, close };
+    /**
+     * Get past the door.
+     *
+     * Half a product usually lives behind a sign in, and a walk that only ever
+     * sees the marketing page has nothing to say about the part people actually
+     * use. So the form is found, filled and submitted like a visitor would.
+     *
+     * The credentials are never written into an injected script. They go over
+     * the wire as Input.insertText parameters into the focused field, which
+     * means nothing has to be escaped, they never appear in page source, and a
+     * page that reads its own scripts cannot recover them. They are never sent
+     * to the model and never logged.
+     *
+     * Whether it worked is measured after the fact, not assumed: still a
+     * password box on screen means it did not.
+     */
+    const signIn = async (credentials: TestCredentials): Promise<SignInResult> => {
+      try {
+        let door = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+
+        /* Not on this page, but something here points at it. */
+        if (!door.form && door.link) {
+          const clicked = await clickLink(door.link);
+          if (!clicked) await goto(door.link);
+          await new Promise((r) => setTimeout(r, 800));
+          door = await evaluate<LoginProbe>(LOGIN_SCRIPT);
+        }
+
+        if (!door.form) {
+          return { ok: false, evidence: 'I could not find anywhere to sign in, so this is the public side only.' };
+        }
+        if (!door.user) {
+          return { ok: false, evidence: 'I found a password box with no username field beside it, so I left it alone.' };
+        }
+
+        const before = door.url;
+
+        const fill = async (marker: string, text: string) => {
+          await evaluate<boolean>(
+            `JSON.stringify((() => {
+              const el = document.querySelector('[${marker}]');
+              if (!el) return false;
+              el.focus();
+              el.select && el.select();
+              return true;
+            })())`,
+          );
+          await send('Input.insertText', { text });
+          await new Promise((r) => setTimeout(r, 180));
+        };
+
+        await fill('data-damian-user', credentials.username);
+        await fill('data-damian-pass', credentials.password);
+
+        if (door.submit) {
+          await evaluate<boolean>(
+            `JSON.stringify((() => {
+              const el = document.querySelector('[data-damian-submit]');
+              if (!el) return false;
+              el.click();
+              return true;
+            })())`,
+          );
+        } else {
+          /* No button to press, so submit the way a keyboard would. */
+          for (const type of ['keyDown', 'keyUp']) {
+            await send('Input.dispatchKeyEvent', {
+              type,
+              key: 'Enter',
+              code: 'Enter',
+              windowsVirtualKeyCode: 13,
+              nativeVirtualKeyCode: 13,
+            });
+          }
+        }
+
+        /* Give the round trip a chance, then look rather than assume. */
+        let after = await evaluate<VerifyProbe>(VERIFY_SCRIPT);
+        for (let tries = 0; tries < 4 && after.pass > 0 && !after.err; tries += 1) {
+          await new Promise((r) => setTimeout(r, 900));
+          after = await evaluate<VerifyProbe>(VERIFY_SCRIPT);
+        }
+
+        if (after.err) {
+          return { ok: false, evidence: 'It said those details were not right, so I am staying on the public side.' };
+        }
+        if (after.pass > 0) {
+          return { ok: false, evidence: 'The password box is still there, so the sign in did not take.' };
+        }
+        if (after.url === before && !after.out) {
+          return { ok: false, evidence: 'Nothing changed after I submitted, so I cannot say I am in.' };
+        }
+        return { ok: true, evidence: `Signed in. Walking the part of ${labelFor(new URL(after.url))} people actually use.` };
+      } catch {
+        return { ok: false, evidence: 'The sign in did not go through, so this is the public side only.' };
+      }
+    };
+
+    return { send, evaluate, goto, clickLink, scrollThrough, measureMobile, signIn, close };
   } catch (error) {
     await close();
     throw error;
@@ -1260,6 +1453,7 @@ const labelFor = (url: URL) => {
 export async function* crawl(
   rawUrl: string,
   hooks: CrawlHooks,
+  credentials?: TestCredentials | null,
 ): AsyncGenerator<CrawlEvent> {
   const entry = assertPublicHttpUrl(rawUrl);
 
@@ -1352,12 +1546,27 @@ export async function* crawl(
       await session.goto(entry.href);
 
       /*
+       * Get in first, if there is anything to get into. Everything after this
+       * point then happens as a signed in visitor, which is the half of most
+       * products that is worth looking at. Reported either way: a failed sign
+       * in is said out loud rather than quietly walked past.
+       */
+      if (credentials) {
+        const result = await session.signIn(credentials);
+        push({ type: 'auth', ...result });
+      }
+
+      /*
        * Look around first, then stop and think. The scroll is the looking, and
        * the hook is the thinking, which holds the walk until every note on this
        * page has been read.
        */
       await session.scrollThrough();
-      await hooks.onPage(await capturePage(entry.href, labelFor(entry)), 0);
+      const landed = await session.evaluate<{ url: string }>(
+        'JSON.stringify({ url: location.href })',
+      );
+      const here = new URL(landed.url);
+      await hooks.onPage(await capturePage(here.href, labelFor(here)), 0);
 
       const links = await session.evaluate<{ url: string; label: string; reachable: boolean }[]>(
         LINKS_SCRIPT,

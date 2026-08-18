@@ -271,7 +271,12 @@ export function useDamian(): DamianRun {
         response = await fetch('/api/capture', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ url: target }),
+          /*
+           * Sent only when they were entered, and only for this request. Damian
+           * types them into the target's own sign in so the walk covers the
+           * half of the product that lives behind the door.
+           */
+          body: JSON.stringify({ url: target, credentials }),
         });
       } catch {
         fallback('Damian could not reach the capture service.');
@@ -341,6 +346,16 @@ export function useDamian(): DamianRun {
               current.includes(noteId) ? current : [...current, noteId],
             );
             say(line, 'action', ticket);
+            continue;
+          }
+
+          if (event.type === 'auth') {
+            /* Said either way. A sign in that failed is part of the record. */
+            say(
+              String(event.evidence),
+              event.ok ? 'action' : 'info',
+              ticket,
+            );
             continue;
           }
 
@@ -437,12 +452,16 @@ export function useDamian(): DamianRun {
     /* Reading it back afterwards, everything on the page is on the page. */
     if (hasCompleted) return page.notes;
 
-    /*
-     * Mid walk, only the note he is talking about right now. Leaving the
-     * earlier ones up meant a stale box hanging over a part of the page he had
-     * already moved on from, and nothing to say which one he meant.
-     */
     const live = page.notes.filter((note) => revealed.includes(note.id));
+
+    /*
+     * One note at a time applies to the page he is working on and nowhere else.
+     * Leaving earlier boxes up on the live page meant a stale frame hanging
+     * over something he had moved on from, with nothing to say which he meant.
+     * A page you have walked back to is finished, so it shows everything he
+     * said about it: going back and finding it blank is just lost work.
+     */
+    if (activePage !== pages.length - 1) return live;
     return live.length ? [live[live.length - 1]] : [];
   }, [pages, activePage, revealed, hasCompleted]);
 

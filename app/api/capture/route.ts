@@ -1,6 +1,7 @@
 import { crawl, findChrome, type PageCapture } from '@/lib/capture';
 import { analysePage, summarise } from '@/lib/findings';
 import { judgePage, judgeWalk } from '@/lib/judge';
+import type { TestCredentials } from '@/lib/types';
 
 /* Chrome is spawned per request, so this cannot run on the edge. */
 export const runtime = 'nodejs';
@@ -37,8 +38,9 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export async function POST(request: Request) {
   let url: unknown;
+  let auth: unknown;
   try {
-    ({ url } = await request.json());
+    ({ url, credentials: auth } = await request.json());
   } catch {
     return Response.json({ error: 'Send a JSON body with a url.' }, { status: 400 });
   }
@@ -46,6 +48,20 @@ export async function POST(request: Request) {
   if (typeof url !== 'string' || url.trim().length === 0) {
     return Response.json({ error: 'Damian needs a URL to open.' }, { status: 400 });
   }
+
+  /*
+   * Held for the length of this request and no longer. Typed into the target's
+   * own form over CDP, never persisted, never logged, and never part of
+   * anything sent to the model.
+   */
+  const credentials =
+    auth &&
+    typeof auth === 'object' &&
+    typeof (auth as TestCredentials).username === 'string' &&
+    typeof (auth as TestCredentials).password === 'string' &&
+    (auth as TestCredentials).username.length > 0
+      ? { username: (auth as TestCredentials).username, password: (auth as TestCredentials).password }
+      : null;
 
   if (!findChrome()) {
     /*
@@ -96,7 +112,7 @@ export async function POST(request: Request) {
       };
 
       try {
-        for await (const event of crawl(target, { onPage: readPage })) {
+        for await (const event of crawl(target, { onPage: readPage }, credentials)) {
           /* Frames are the live view. They pass straight through. */
           if (event.type === 'frame') {
             emit({ type: 'frame', frame: event.frame });
@@ -110,6 +126,11 @@ export async function POST(request: Request) {
 
           if (event.type === 'move') {
             emit({ type: 'move', label: event.label, clicked: event.clicked });
+            continue;
+          }
+
+          if (event.type === 'auth') {
+            emit({ type: 'auth', ok: event.ok, evidence: event.evidence });
             continue;
           }
         }

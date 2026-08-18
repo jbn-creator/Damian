@@ -48,7 +48,17 @@ timers when the host has no Chrome. The interface says so when that happens
 rather than presenting it as a capture.
 
 Bot walls are detected and named, never bypassed, and no finding is reported
-from behind one. Credentials are held in memory for the session.
+from behind one.
+
+Given test credentials, Damian finds the sign in, fills it and submits it before
+the walk begins, so everything after that happens as a signed in visitor. That
+matters because the half of most products worth looking at is the half behind
+the door. Whether it worked is measured rather than assumed: a password box
+still on screen means it did not, and a failed sign in is said out loud rather
+than quietly walked past. The credentials are typed into the target's own form
+as CDP input parameters, so they are never written into an injected script,
+never appear in page source, are never sent to the model, and are held only for
+the length of that one request.
 
 ### What Damian says
 

@@ -82,6 +82,16 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
   const [pinnedToLatest, setPinnedToLatest] = useState(true);
   /* Read inside the reveal effect, so a scroll does not restart it. */
   const pinnedRef = useRef(true);
+  /*
+   * What was already on the feed the moment this tab mounted.
+   *
+   * Switching tabs unmounts this panel, so coming back it has to rebuild every
+   * line from scratch. Typing them all out again takes as long as the run did
+   * and reads as though the log was thrown away. Anything in this set is
+   * history and appears at once. Only what arrives afterwards is news, and news
+   * is what the reveal is for.
+   */
+  const atMount = useRef<Set<string> | null>(null);
   const reduced = usePrefersReducedMotion();
 
   /*
@@ -109,8 +119,13 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
   }, [reduced]);
 
   useEffect(() => {
+    /* First pass of this mount. Everything present already happened. */
+    atMount.current ??= new Set(logs.map((log) => log.id));
+
     if (logs.length === 0) {
       revealed.current.clear();
+      /* A new run starts with nothing behind it, so every line is news again. */
+      atMount.current = new Set();
       timelines.current.forEach((timeline) => timeline.kill());
       timelines.current = [];
       return;
@@ -118,7 +133,6 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
 
     const fresh = logs.filter((log) => !revealed.current.has(log.id));
     if (fresh.length === 0) return;
-    fresh.forEach((log) => revealed.current.add(log.id));
 
     const timeline = gsap.timeline();
     timelines.current = timelines.current.filter((existing) => existing.isActive());
@@ -126,10 +140,17 @@ export function DamianFeed({ logs, isRunning }: DamianFeedProps) {
 
     fresh.forEach((log) => {
       const line = lines.current.get(log.id);
+      /*
+       * Marked only once it has somewhere to land. Marking before the lookup
+       * meant a line whose node was not mounted yet was recorded as revealed,
+       * never retried, and left at opacity zero for the rest of the session:
+       * counted in the header, invisible in the list.
+       */
       if (!line) return;
+      revealed.current.add(log.id);
       const characters = line.querySelectorAll('[data-char]');
 
-      if (reduced) {
+      if (reduced || atMount.current?.has(log.id)) {
         gsap.set(line, { opacity: 1, y: 0 });
         gsap.set(characters, { opacity: 1 });
         return;
