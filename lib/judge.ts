@@ -191,7 +191,42 @@ function digest(audit: DomAudit): string {
 /** Pixels of the captured frame to the percentage, centre origin, box the overlay wants. */
 export function toRect(box: unknown): Rect | null {
   if (typeof box !== 'object' || box === null) return null;
-  const { x, y, w, h } = box as Record<string, unknown>;
+
+  /*
+   * The endpoint's JSON mode sometimes mangles a box on the way out. Two shapes,
+   * both seen in one run of eleven rejections: keys named width and height
+   * where the brief said w and h, and a dropped key name that glues its value
+   * into the next key, so {"x":62,"y":588,"w":1290,"h":312} arrives as
+   * {"x":62,"588,\"w":1290,"h":312}. In the second shape both numbers are still
+   * present and the orphan is unambiguous when exactly one field is missing, so
+   * this is transport repair rather than invention: every figure is the model's
+   * own. Anything still short of four finite numbers is refused as before.
+   */
+  const fields: Record<string, unknown> = {};
+  let orphan: number | null = null;
+  for (const [key, value] of Object.entries(box as Record<string, unknown>)) {
+    const glued = /^(\d+(?:\.\d+)?)\s*,\s*"?(x|y|w|h|width|height)$/.exec(key);
+    if (glued) {
+      orphan = Number(glued[1]);
+      fields[glued[2]] = value;
+    } else {
+      fields[key] = value;
+    }
+  }
+  fields.w ??= fields.width;
+  fields.h ??= fields.height;
+  /* A third shape seen live: corner pairs. x2 and y2 are the model's own
+     numbers too, so the conversion invents nothing. */
+  if (typeof fields.w !== 'number' && typeof fields.x === 'number' && typeof fields.x2 === 'number')
+    fields.w = fields.x2 - fields.x;
+  if (typeof fields.h !== 'number' && typeof fields.y === 'number' && typeof fields.y2 === 'number')
+    fields.h = fields.y2 - fields.y;
+  const missing = (['x', 'y', 'w', 'h'] as const).filter(
+    (name) => typeof fields[name] !== 'number',
+  );
+  if (orphan !== null && missing.length === 1) fields[missing[0]] = orphan;
+
+  const { x, y, w, h } = fields;
   if (![x, y, w, h].every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
 
   const width = ((w as number) / FRAME_W) * 100;
@@ -246,29 +281,48 @@ export function toNote(
     return null;
   };
 
-  /*
-   * A measured rectangle beats an estimated one every time, so the named
-   * anchor wins and the model's own box is only read when it named nothing
-   * that was actually offered.
-   */
-  const named = typeof finding.anchor === 'string' ? anchors.get(finding.anchor) : undefined;
-  const rect = named ?? toRect(finding.box);
-  if (!rect) return rejected('no box resolved');
-
+  /* Only a finding with nothing to say is nothing. */
   const note = line(finding.note, 400);
   const title = line(finding.title, 80);
   if (!note) return rejected('no note text');
   if (!title) return rejected('no title text');
+
+  /*
+   * A measured rectangle beats an estimated one every time, so the named
+   * anchor wins and the model's own box is only read when it named nothing
+   * that was actually offered. The name is normalised on the way in, so
+   * "Main Content" still finds main-content.
+   */
+  const named =
+    typeof finding.anchor === 'string'
+      ? anchors.get(finding.anchor.trim().toLowerCase().replace(/\s+/g, '-'))
+      : undefined;
+  const rect = named ?? toRect(finding.box);
+
+  /*
+   * Text but nowhere to point degrades to a page-level note: spoken, listed,
+   * but never framed, because a frame around nothing in particular is a lie
+   * about precision. Losing the pointer is a formatting problem; losing the
+   * judgement was a product problem, measured at one finding in four.
+   */
+  if (!rect) {
+    trace(
+      `${id} degraded to page level :: anchor=${JSON.stringify(finding.anchor ?? null)}, box ${
+        finding.box === undefined ? 'absent' : `sent ${JSON.stringify(finding.box)}`
+      }, offered: ${[...anchors.keys()].join(', ') || 'none'}`,
+    );
+  }
 
   const kind = finding.kind as AuditPin['type'];
   const score = typeof finding.score === 'number' && Number.isFinite(finding.score) ? finding.score : 50;
 
   return {
     id,
-    x: rect.x,
-    y: rect.y,
-    w: rect.w,
-    h: rect.h,
+    x: rect?.x ?? 50,
+    y: rect?.y ?? 50,
+    w: rect?.w,
+    h: rect?.h,
+    ...(rect ? {} : { pageLevel: true }),
     type: KINDS.has(kind) ? kind : 'warning',
     title,
     description: line(finding.why, 600) ?? note,

@@ -167,7 +167,14 @@ export function NoteOverlay({
   const tweens = useRef<gsap.core.Tween[]>([]);
   const reduced = usePrefersReducedMotion();
 
-  const spots = useMemo(() => layout(notes), [notes]);
+  /*
+   * Page-level notes have no element to sit beside, so they take no part in
+   * the collision layout. They dock along the bottom edge of the page instead,
+   * stacking upward, which reads as "about this page" without pretending to a
+   * precision the note does not have.
+   */
+  const anchoredNotes = useMemo(() => notes.filter((note) => !note.pageLevel), [notes]);
+  const spots = useMemo(() => layout(anchoredNotes), [anchoredNotes]);
 
   /* Killed on unmount only. Killing on every arrival would freeze the last one. */
   useEffect(
@@ -217,10 +224,16 @@ export function NoteOverlay({
         visible ? 'opacity-100' : 'opacity-0'
       }`}
     >
-      {notes.map((note, index) => {
+      {notes.map((note) => {
         const width = Math.max(note.w ?? 0, 1.5);
         const height = Math.max(note.h ?? 0, 1.5);
-        const spot = spots[index] ?? { left: 2, top: 2 };
+        const index = anchoredNotes.indexOf(note);
+        const docked = note.pageLevel
+          ? notes.filter((other) => other.pageLevel).indexOf(note)
+          : 0;
+        const spot = note.pageLevel
+          ? { left: 2, top: 78 - docked * (CARD_H + 1) }
+          : spots[index] ?? { left: 2, top: 2 };
         const isOpen = openNoteId === note.id;
 
         return (
@@ -235,28 +248,31 @@ export function NoteOverlay({
             {/*
               The element under discussion, framed. When spotlit, the scrim is
               an outward box shadow on this same rectangle, so the whole page
-              dims and only this stays cut out of the dimming.
+              dims and only this stays cut out of the dimming. A page-level
+              note has no element, so it gets no frame and dims nothing.
             */}
-            <span
-              aria-hidden="true"
-              className={`absolute transition-shadow duration-500 ease-instrument ${
-                spotlit ? 'shadow-spotlight' : ''
-              }`}
-              style={{
-                left: `${note.x - width / 2}%`,
-                top: `${note.y - height / 2}%`,
-                width: `${width}%`,
-                height: `${height}%`,
-              }}
-            >
-              <Brackets tone={note.type} zoom={zoom} />
+            {!note.pageLevel && (
               <span
-                className={`absolute left-0 top-0 grid h-4 w-4 place-items-center rounded-full ${FILL[note.type]} font-body text-[0.5rem] font-bold text-void`}
-                style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
+                aria-hidden="true"
+                className={`absolute transition-shadow duration-500 ease-instrument ${
+                  spotlit ? 'shadow-spotlight' : ''
+                }`}
+                style={{
+                  left: `${note.x - width / 2}%`,
+                  top: `${note.y - height / 2}%`,
+                  width: `${width}%`,
+                  height: `${height}%`,
+                }}
               >
-                {index + 1}
+                <Brackets tone={note.type} zoom={zoom} />
+                <span
+                  className={`absolute left-0 top-0 grid h-4 w-4 place-items-center rounded-full ${FILL[note.type]} font-body text-[0.5rem] font-bold text-void`}
+                  style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
+                >
+                  {index + 1}
+                </span>
               </span>
-            </span>
+            )}
 
             {/*
               The card. Counter scaled against canvas zoom by the inline style,
@@ -282,7 +298,9 @@ export function NoteOverlay({
                   event.stopPropagation();
                   onToggleNote(note.id);
                 }}
-                className={`pointer-events-auto block w-full cursor-pointer overflow-hidden rounded-2xl border ${CARD[note.type]} bg-void/85 text-left shadow-panel backdrop-blur-xl transition-colors duration-200 ease-instrument hover:bg-void ${
+                className={`pointer-events-auto block w-full cursor-pointer overflow-hidden rounded-2xl border ${
+                  note.pageLevel ? 'border-dashed' : ''
+                } ${CARD[note.type]} bg-void/85 text-left shadow-panel backdrop-blur-xl transition-colors duration-200 ease-instrument hover:bg-void ${
                   isOpen ? 'ring-2 ring-chalk ring-offset-2 ring-offset-void' : ''
                 }`}
               >
@@ -295,11 +313,12 @@ export function NoteOverlay({
                   <span className={`text-micro font-bold uppercase ${INK[note.type]}`}>
                     {LABEL[note.type]}
                   </span>
+                  {/* Anchored notes show where they sit; a page-level note says what it is instead. */}
                   <span
                     data-numeric
                     className="ml-auto font-mono text-[0.5625rem] leading-none text-silver"
                   >
-                    {`${Math.round(note.x)}.${Math.round(note.y)}`}
+                    {note.pageLevel ? 'PAGE' : `${Math.round(note.x)}.${Math.round(note.y)}`}
                   </span>
                   <span
                     data-numeric

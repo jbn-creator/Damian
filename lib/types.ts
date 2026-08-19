@@ -30,6 +30,12 @@ export interface AuditPin {
   note?: string;
   /** Extension: which captured page this belongs to. */
   page?: number;
+  /**
+   * Extension: true when the note is about the page rather than one element.
+   * Spoken and listed like any other, but never framed, because a frame
+   * around nothing in particular is a lie about precision.
+   */
+  pageLevel?: boolean;
 }
 
 export interface ProductIdea {

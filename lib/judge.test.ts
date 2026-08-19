@@ -40,6 +40,30 @@ assert.equal(toRect(null), null);
 assert.equal(toRect({ x: '620', y: 400, w: 200, h: 100 }), null);
 assert.equal(toRect({ x: NaN, y: 400, w: 200, h: 100 }), null);
 
+/*
+ * Transport repair. The endpoint's JSON mode was seen sending width and height
+ * where the brief said w and h, and dropping a key name so its value glues
+ * into the next key. Both carry the model's own numbers, so both are read.
+ */
+const renamed = toRect({ x: 320, y: 180, width: 200, height: 100 });
+assert.ok(renamed);
+assert.deepEqual(renamed, rect); // identical to the well-formed 320,180 200x100 box
+
+const glued = toRect({ x: 320, '180,"w': 200, h: 100 });
+assert.ok(glued);
+assert.deepEqual(glued, rect); // y recovered from the key, w from its value
+
+/* Two missing fields is ambiguity, not repair material. */
+assert.equal(toRect({ '180,"w': 200, h: 100 }), null);
+
+/* Corner pairs, the third malformation seen live. Converted, not estimated. */
+const cornered = toRect({ x: 320, y: 180, x2: 520, y2: 280 });
+assert.ok(cornered);
+assert.deepEqual(cornered, rect);
+
+/* An inverted pair has negative width, which is nowhere honest to point. */
+assert.equal(toRect({ x: 520, y: 180, x2: 320, y2: 280 }), null);
+
 const whole = {
   kind: 'friction',
   box: { x: 620, y: 400, w: 200, h: 100 },
@@ -71,12 +95,25 @@ assert.ok(bare);
 assert.equal(bare.description, whole.note);
 assert.ok(bare.suggestedFix.length > 0);
 
-/* What a note cannot do without: somewhere to point, and something to say. */
-assert.equal(toNote({ ...whole, box: undefined }, 'x', 0), null);
+/* What a note cannot do without is something to say. */
 assert.equal(toNote({ ...whole, note: '   ' }, 'x', 0), null);
 assert.equal(toNote({ ...whole, title: 42 }, 'x', 0), null);
 assert.equal(toNote('a note', 'x', 0), null);
 assert.equal(toNote(null, 'x', 0), null);
+
+/*
+ * Text with nowhere to point degrades to a page-level note, never to nothing.
+ * The old rule dropped these, which deleted one finding in four, and nothing
+ * knew whether the deleted one was the best one.
+ */
+const unplaced = toNote({ ...whole, box: undefined }, 'x', 0);
+assert.ok(unplaced);
+assert.equal(unplaced.pageLevel, true);
+assert.equal(unplaced.w, undefined); // no box means no frame, not a guessed one
+assert.equal(unplaced.note, whole.note);
+
+/* An anchored note is not page level, and says so by omission. */
+assert.equal(note.pageLevel, undefined);
 
 /*
  * Anchors. A rectangle the DOM measured is exact and one the model estimated is
@@ -98,9 +135,15 @@ assert.deepEqual({ x: both?.x, y: both?.y }, { x: measured.x, y: measured.y });
 const invented = toNote({ ...whole, anchor: 'the vibe' }, 'x', 0, anchors);
 assert.ok(invented);
 assert.equal(invented.x, 50);
+assert.equal(invented.pageLevel, undefined); // the model's own box still places it
 
-/* No anchor and no box is nowhere to point. */
-assert.equal(toNote({ ...whole, anchor: 'the vibe', box: undefined }, 'x', 0, anchors), null);
+/* A near-miss name still lands on the measured rectangle. */
+const cased = toNote({ ...whole, anchor: '  HEADLINE ' }, 'x', 0, anchors);
+assert.equal(cased?.x, measured.x);
+
+/* No anchor and no box has nowhere to point, so it speaks at page level. */
+const spoken = toNote({ ...whole, anchor: 'the vibe', box: undefined }, 'x', 0, anchors);
+assert.equal(spoken?.pageLevel, true);
 
 const idea = {
   category: 'missing_feature',
