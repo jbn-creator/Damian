@@ -20,7 +20,13 @@ thesis test and it has not been run.
 
 ---
 
-## Phase 1 — Recover the discarded quarter
+## Phase 1 — Recover the discarded quarter ✅ DONE 2026-08-19
+
+The evidence run said the inferred cause was wrong: zero anchor near misses. The
+model mangles boxes in transit — dropped key names, width/height for w/h, corner
+pairs — three shapes across runs. Unambiguous transport damage is repaired, anchor
+lookup is normalised, and text with no box degrades to a page-level note. Verified:
+19 back / 18 usable / 0 dropped where the same site lost 11 of 19 before.
 
 `toNote` drops one finding in four. Deterministic: 4 back / 3 usable, three times,
 across structurally different pages. The walk call kept 5 of 5 because `toIdea`
@@ -42,7 +48,14 @@ is logged with a named cause.
 
 ---
 
-## Phase 2 — Survive the walk
+## Phase 2 — Survive the walk ✅ DONE 2026-08-19
+
+Judge calls fire at capture and narrate strictly in order; travel replays from a
+buffer so nothing on screen is ahead of the narration. A soft deadline under
+maxDuration ends every path in a real done event — forced to 45s it produced five
+pages of measured notes, not a blank error. Two judge calls in flight at most: the
+endpoint serves one per key and five at once starved the tail into its own timeout.
+Measured on the same five pages: 275s serial, 175–198s pipelined. maxDuration stays.
 
 Three pages spent 90.5s in the model. Five pages ≈ 150s, plus crawl (~50s), plus
 the reading dwells — which the **server** holds, so they are inside the same budget:
@@ -68,7 +81,12 @@ partial run with a `done` event rather than an error screen.
 
 ---
 
-## Phase 3 — Provenance on screen
+## Phase 3 — Provenance on screen ✅ DONE 2026-08-19
+
+Every note and idea carries measured or judged from construction to the interface.
+When the model was expected and did not answer, the feed says so. The receipt —
+real token counts, dollars at an env-overridable rate — is spoken at the end of
+the walk and rides the done event.
 
 Every finding carries `measured` or `judged` through to the UI. Roughly three lines,
 and it is what stops "did the model actually run" from ever being asked again.
