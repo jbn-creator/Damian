@@ -569,6 +569,7 @@ export function analysePage(
       impactScore: draft.score,
       note: draft.note,
       page: pageIndex,
+      origin: 'measured',
     };
     notes.push(note);
   });
@@ -602,7 +603,7 @@ export function summarise(captures: PageCapture[]): {
     draftsFor(capture.audit).forEach((draft) => {
       if (!draft.idea || seen.has(draft.idea.id)) return;
       seen.add(draft.idea.id);
-      ideas.push(draft.idea);
+      ideas.push({ ...draft.idea, origin: 'measured' });
     });
   });
 

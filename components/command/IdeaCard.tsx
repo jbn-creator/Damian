@@ -106,6 +106,13 @@ export function IdeaCard({ idea, targetUrl }: IdeaCardProps) {
           <Clock aria-hidden="true" className="h-2.5 w-2.5" strokeWidth={2.4} />
           <span data-numeric>{idea.effort}</span>
         </span>
+
+        {/* Which brain wrote it, so the fallback voice can never pass as the model. */}
+        {idea.origin ? (
+          <span className="rounded-full border border-hairline px-2.5 py-1 font-mono text-[0.5625rem] uppercase tracking-wide text-silver/80">
+            {idea.origin}
+          </span>
+        ) : null}
       </div>
 
       <h4 className="mt-3.5 text-pretty font-display text-[1.0625rem] font-bold leading-snug tracking-cut text-chalk">

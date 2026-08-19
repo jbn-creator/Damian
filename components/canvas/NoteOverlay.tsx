@@ -313,6 +313,12 @@ export function NoteOverlay({
                   <span className={`text-micro font-bold uppercase ${INK[note.type]}`}>
                     {LABEL[note.type]}
                   </span>
+                  {/* Which brain wrote it. Measured is DOM arithmetic; judged is the model. */}
+                  {note.origin ? (
+                    <span className="font-mono text-[0.5rem] uppercase tracking-wide text-silver/80">
+                      {note.origin}
+                    </span>
+                  ) : null}
                   {/* Anchored notes show where they sit; a page-level note says what it is instead. */}
                   <span
                     data-numeric

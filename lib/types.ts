@@ -36,6 +36,12 @@ export interface AuditPin {
    * around nothing in particular is a lie about precision.
    */
   pageLevel?: boolean;
+  /**
+   * Extension: which brain wrote this. Measured is arithmetic on the DOM;
+   * judged is the vision model. Shown in the interface, because a fallback
+   * that renders identically to the model went unnoticed for 44 commits.
+   */
+  origin?: 'measured' | 'judged';
 }
 
 export interface ProductIdea {
@@ -48,6 +54,8 @@ export interface ProductIdea {
   codeSnippet?: string;
   /** Extension: the proposed solution, stated separately from the problem. */
   solution: string;
+  /** Extension: which brain wrote this. Same field as on AuditPin. */
+  origin?: 'measured' | 'judged';
 }
 
 export interface DamianLog {

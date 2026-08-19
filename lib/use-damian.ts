@@ -359,6 +359,16 @@ export function useDamian(): DamianRun {
             continue;
           }
 
+          /*
+           * Damian talking about himself: the model not answering, what the
+           * run cost. Said in the feed, because a fallback the interface
+           * does not admit to is indistinguishable from the real thing.
+           */
+          if (event.type === 'aside') {
+            say(String(event.says), 'info', ticket);
+            continue;
+          }
+
           if (event.type === 'plan') {
             const pages = event.pages as unknown as string[];
             say(

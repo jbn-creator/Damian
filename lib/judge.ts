@@ -330,6 +330,7 @@ export function toNote(
     impactScore: Math.round(Math.min(Math.max(score, 0), 100)),
     note,
     page,
+    origin: 'judged',
   };
 }
 
@@ -346,12 +347,44 @@ function parseList(text: string, key: string): unknown[] {
   }
 }
 
+/**
+ * What one run actually spent, counted from the endpoint's own usage figures.
+ *
+ * The receipt existed only in judge.log, which meant the person paying could
+ * not see it. The route makes one of these per run, threads it through every
+ * call, and puts the total on screen at the end of the walk.
+ */
+export interface Receipt {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export const newReceipt = (): Receipt => ({ calls: 0, promptTokens: 0, completionTokens: 0 });
+
+/**
+ * Tokens to dollars, at the endpoint's published rate.
+ *
+ * The rates are env-overridable because they belong to the provider, not to
+ * this repo. The defaults are derived from the verified 2026-08-19 run:
+ * $0.043 observed for 14,536 prompt and 6,259 completion tokens, with output
+ * carrying 60% of the spend. Derived, so approximate; the token counts
+ * alongside are exact.
+ */
+const USD_PER_M_PROMPT = Number(process.env.GLM_USD_PER_M_PROMPT ?? 1.18);
+const USD_PER_M_COMPLETION = Number(process.env.GLM_USD_PER_M_COMPLETION ?? 4.12);
+
+export const toUsd = (receipt: Receipt) =>
+  (receipt.promptTokens * USD_PER_M_PROMPT + receipt.completionTokens * USD_PER_M_COMPLETION) /
+  1_000_000;
+
 /** One request to the endpoint. Returns the reply text, or null on any trouble. */
 async function ask(
   system: string,
   content: unknown[],
   maxTokens: number,
   label: string,
+  receipt?: Receipt,
 ): Promise<string | null> {
   const started = Date.now();
   const took = () => `${Date.now() - started}ms`;
@@ -387,6 +420,11 @@ async function ask(
       trace(`${label} 200 in ${took()} but no text in the reply`);
       return null;
     }
+    if (receipt) {
+      receipt.calls += 1;
+      receipt.promptTokens += body.usage?.prompt_tokens ?? 0;
+      receipt.completionTokens += body.usage?.completion_tokens ?? 0;
+    }
     trace(`${label} 200 in ${took()}, ${reply.length} chars, tokens ${JSON.stringify(body.usage ?? {})}`);
     return reply;
   } catch (error) {
@@ -409,6 +447,25 @@ export const canJudge = () => Boolean(process.env.GLM_API_KEY);
 export async function judgePage(
   capture: PageCapture,
   pageIndex: number,
+  receipt?: Receipt,
+): Promise<PageNotes | null> {
+  try {
+    return await judgePageInner(capture, pageIndex, receipt);
+  } catch (error) {
+    /*
+     * A crash in here is a fallback like any other, and a fallback that does
+     * not say its own name cost two pages of judgement with no evidence of
+     * why. Nothing in this file may fail silently, including this file.
+     */
+    trace(`page ${pageIndex} judge crashed: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+async function judgePageInner(
+  capture: PageCapture,
+  pageIndex: number,
+  receipt?: Receipt,
 ): Promise<PageNotes | null> {
   if (!canJudge()) {
     trace('no GLM_API_KEY, so every note on this walk is a measured one');
@@ -444,6 +501,7 @@ ${digest(capture.audit)}`,
     ],
     4000,
     `page ${pageIndex} (${capture.label})`,
+    receipt,
   );
   if (!reply) return null;
 
@@ -525,6 +583,7 @@ export function toIdea(raw: unknown, id: string): ProductIdea | null {
     solution,
     impact: IMPACTS.has(impact) ? impact : 'Medium',
     effort: line(idea.effort, 12) ?? '1d',
+    origin: 'judged',
   };
 }
 
@@ -534,7 +593,23 @@ export function toIdea(raw: unknown, id: string): ProductIdea | null {
  * Returns null when there is no key or nothing usable came back, and the caller
  * falls back to the measured quick wins.
  */
-export async function judgeWalk(captures: PageCapture[]): Promise<ProductIdea[] | null> {
+export async function judgeWalk(
+  captures: PageCapture[],
+  receipt?: Receipt,
+): Promise<ProductIdea[] | null> {
+  try {
+    return await judgeWalkInner(captures, receipt);
+  } catch (error) {
+    /* Same rule as judgePage: no silent failures, including our own. */
+    trace(`walk judge crashed: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+async function judgeWalkInner(
+  captures: PageCapture[],
+  receipt?: Receipt,
+): Promise<ProductIdea[] | null> {
   if (!canJudge()) return null;
 
   /* A gate is not the product, so a walled page tells us nothing about it. */
@@ -562,6 +637,7 @@ export async function judgeWalk(captures: PageCapture[]): Promise<ProductIdea[] 
     content,
     4000,
     `walk (${seen.length} pages, ${Math.round(JSON.stringify(content).length / 1024)}kb)`,
+    receipt,
   );
   if (!reply) return null;
 
