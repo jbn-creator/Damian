@@ -226,8 +226,25 @@ export function toNote(
   page: number,
   anchors: Map<string, Rect> = new Map(),
 ): AuditPin | null {
-  if (typeof raw !== 'object' || raw === null) return null;
+  if (typeof raw !== 'object' || raw === null) {
+    trace(`${id} rejected: not an object`);
+    return null;
+  }
   const finding = raw as Record<string, unknown>;
+
+  /*
+   * Every rejection names its branch, what the model actually sent, and what
+   * this page had on offer. One finding in four dies in here and the cause has
+   * only ever been inferred; a near miss must be visible as a near miss.
+   */
+  const rejected = (branch: string) => {
+    trace(
+      `${id} rejected: ${branch} :: anchor=${JSON.stringify(finding.anchor ?? null)}, box ${
+        finding.box === undefined ? 'absent' : `sent ${JSON.stringify(finding.box)}`
+      }, offered: ${[...anchors.keys()].join(', ') || 'none'}`,
+    );
+    return null;
+  };
 
   /*
    * A measured rectangle beats an estimated one every time, so the named
@@ -236,11 +253,12 @@ export function toNote(
    */
   const named = typeof finding.anchor === 'string' ? anchors.get(finding.anchor) : undefined;
   const rect = named ?? toRect(finding.box);
-  if (!rect) return null;
+  if (!rect) return rejected('no box resolved');
 
   const note = line(finding.note, 400);
   const title = line(finding.title, 80);
-  if (!note || !title) return null;
+  if (!note) return rejected('no note text');
+  if (!title) return rejected('no title text');
 
   const kind = finding.kind as AuditPin['type'];
   const score = typeof finding.score === 'number' && Number.isFinite(finding.score) ? finding.score : 50;
