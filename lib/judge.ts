@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import type { DomAudit, PageCapture, Rect } from './capture';
 import type { AuditPin, ProductIdea } from './types';
 import type { PageNotes } from './findings';
@@ -42,6 +43,26 @@ const FRAME_H = 900;
 
 const MAX_FINDINGS = 4;
 const TIMEOUT_MS = 90_000;
+
+/**
+ * Say what the model did, out loud and on disk.
+ *
+ * Every failure in here used to return null in silence, which meant a run that
+ * fell back to the measured rules looked exactly like a run that did not, and
+ * the question of whether the model had ever answered had no answer anywhere.
+ * The console line is for whoever is watching the dev server. The file is so
+ * the question can still be settled after the run has scrolled away.
+ */
+function trace(line: string) {
+  const stamped = `${new Date().toISOString()} judge: ${line}`;
+  console.warn(stamped);
+  /* A read only filesystem is not a reason to take the walk down. */
+  try {
+    appendFileSync('judge.log', `${stamped}\n`);
+  } catch {
+    /* the console line already went out */
+  }
+}
 
 /**
  * What Damian is for.
@@ -258,7 +279,10 @@ async function ask(
   system: string,
   content: unknown[],
   maxTokens: number,
+  label: string,
 ): Promise<string | null> {
+  const started = Date.now();
+  const took = () => `${Date.now() - started}ms`;
   try {
     const response = await fetch(`${ENDPOINT}/chat/completions`, {
       method: 'POST',
@@ -278,11 +302,24 @@ async function ask(
       }),
     });
 
-    if (!response.ok) return null;
-    const body = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+    if (!response.ok) {
+      trace(`${label} HTTP ${response.status} in ${took()} :: ${(await response.text()).slice(0, 300)}`);
+      return null;
+    }
+    const body = (await response.json()) as {
+      choices?: { message?: { content?: unknown } }[];
+      usage?: Record<string, number>;
+    };
     const reply = body.choices?.[0]?.message?.content;
-    return typeof reply === 'string' ? reply : null;
-  } catch {
+    if (typeof reply !== 'string') {
+      trace(`${label} 200 in ${took()} but no text in the reply`);
+      return null;
+    }
+    trace(`${label} 200 in ${took()}, ${reply.length} chars, tokens ${JSON.stringify(body.usage ?? {})}`);
+    return reply;
+  } catch (error) {
+    /* Overwhelmingly the 90s timeout, so name it rather than guessing later. */
+    trace(`${label} ${(error as Error).name}: ${(error as Error).message} after ${took()}`);
     return null;
   }
 }
@@ -301,9 +338,17 @@ export async function judgePage(
   capture: PageCapture,
   pageIndex: number,
 ): Promise<PageNotes | null> {
-  if (!canJudge() || capture.audit.wall) return null;
+  if (!canJudge()) {
+    trace('no GLM_API_KEY, so every note on this walk is a measured one');
+    return null;
+  }
+  /* The wall is said out loud by the rules, so it needs no line of its own. */
+  if (capture.audit.wall) return null;
   /* Already a data URI from the capture, which is what image_url wants. */
-  if (!capture.screenshot.startsWith('data:image/')) return null;
+  if (!capture.screenshot.startsWith('data:image/')) {
+    trace(`page ${pageIndex} has no screenshot to look at`);
+    return null;
+  }
 
   const anchors = anchorsFor(capture.audit);
   const offered = [...anchors]
@@ -326,13 +371,21 @@ ${digest(capture.audit)}`,
       },
     ],
     4000,
+    `page ${pageIndex} (${capture.label})`,
   );
   if (!reply) return null;
 
-  const notes = parseList(reply, 'findings')
+  /*
+   * Held separately from the notes because the gap between them is the thing
+   * worth knowing. Findings back but no notes out means the reply was fine and
+   * this file threw it away, which reads from the outside as a useless model.
+   */
+  const raw = parseList(reply, 'findings');
+  const notes = raw
     .slice(0, MAX_FINDINGS)
     .map((finding, order) => toNote(finding, `p${pageIndex}-j${order}`, pageIndex, anchors))
     .filter((note): note is AuditPin => note !== null);
+  trace(`page ${pageIndex} ${raw.length} findings back, ${notes.length} usable`);
 
   /* Nothing usable came back, so the measured rules are the better answer. */
   return notes.length ? { notes, says: notes.map((note) => note.note as string) } : null;
@@ -431,13 +484,21 @@ export async function judgeWalk(captures: PageCapture[]): Promise<ProductIdea[] 
     text: `That is ${seen.length} ${seen.length === 1 ? 'page' : 'pages'} of this product. Now say what they should build, cut, or charge for.`,
   });
 
-  const reply = await ask(PRODUCT_BRIEF, content, 4000);
+  /* Every screenshot rides in this one request, so its size is worth naming. */
+  const reply = await ask(
+    PRODUCT_BRIEF,
+    content,
+    4000,
+    `walk (${seen.length} pages, ${Math.round(JSON.stringify(content).length / 1024)}kb)`,
+  );
   if (!reply) return null;
 
-  const ideas = parseList(reply, 'ideas')
+  const raw = parseList(reply, 'ideas');
+  const ideas = raw
     .slice(0, 6)
     .map((idea, order) => toIdea(idea, `idea-j${order}`))
     .filter((idea): idea is ProductIdea => idea !== null);
+  trace(`walk ${raw.length} ideas back, ${ideas.length} usable`);
 
   return ideas.length ? ideas : null;
 }
