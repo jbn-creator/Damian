@@ -293,12 +293,6 @@ while the client separately queues feed lines 900ms apart, so on a burst the
 telemetry clock drifts from the run. One clock should own this. The server has the
 ground truth; the client should follow it.
 
-> **Probably fine, worth confirming once.** 238 wpm is 3.967 words *per second*, so
-> a hold must be `words / 3.967`. The status report described it as "3.967 seconds
-> per word," which would freeze a 20-word note for 79 seconds. Observed dwells of
-> ~4-6s per note suggest the code is right and the prose was loose. Confirm and
-> delete this note.
-
 ---
 
 ## Definition of done for any change
