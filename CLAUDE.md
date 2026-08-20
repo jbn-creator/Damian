@@ -69,6 +69,11 @@ as the bot-wall honesty rule, applied to itself.
 
 ## Verified state
 
+**The standing verification target is `https://basecamp.com`.** Every measured
+number in this repo should come from a run against it, so numbers stay comparable
+run over run. Five pages: `/`, `/pricing`, `/customers`, `/support/testimonials`,
+`/apps`.
+
 As of 2026-08-19, run against a real site, three pages:
 
 | | |

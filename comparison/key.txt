@@ -1,0 +1,3 @@
+Open after the builder has answered.
+
+A = measured rules only, B = rules + judgement

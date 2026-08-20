@@ -363,16 +363,16 @@ export interface Receipt {
 export const newReceipt = (): Receipt => ({ calls: 0, promptTokens: 0, completionTokens: 0 });
 
 /**
- * Tokens to dollars, at the endpoint's published rate.
+ * Tokens to dollars, at Z.ai's published rate for glm-5v-turbo:
+ * $1.20 per million prompt tokens, $4.00 per million completion tokens.
+ * Env-overridable because the rates belong to the provider, not this repo.
  *
- * The rates are env-overridable because they belong to the provider, not to
- * this repo. The defaults are derived from the verified 2026-08-19 run:
- * $0.043 observed for 14,536 prompt and 6,259 completion tokens, with output
- * carrying 60% of the spend. Derived, so approximate; the token counts
- * alongside are exact.
+ * Known overstatement: cached prompt tokens bill lower than fresh ones, and
+ * this arithmetic charges every prompt token at the full rate. The receipt
+ * therefore reads slightly high on cache-heavy walks. Token counts are exact.
  */
-const USD_PER_M_PROMPT = Number(process.env.GLM_USD_PER_M_PROMPT ?? 1.18);
-const USD_PER_M_COMPLETION = Number(process.env.GLM_USD_PER_M_COMPLETION ?? 4.12);
+const USD_PER_M_PROMPT = Number(process.env.GLM_USD_PER_M_PROMPT ?? 1.2);
+const USD_PER_M_COMPLETION = Number(process.env.GLM_USD_PER_M_COMPLETION ?? 4.0);
 
 export const toUsd = (receipt: Receipt) =>
   (receipt.promptTokens * USD_PER_M_PROMPT + receipt.completionTokens * USD_PER_M_COMPLETION) /
