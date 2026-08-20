@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { BlockList, isIP } from 'node:net';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,7 +119,9 @@ export type CrawlEvent =
   | { type: 'page'; capture: PageCapture }
   | { type: 'move'; label: string; clicked: boolean }
   | { type: 'auth'; ok: boolean; evidence: string }
-  | { type: 'plan'; pages: string[] };
+  | { type: 'plan'; pages: string[] }
+  /* The guard refused something mid-walk, and the viewer should know. */
+  | { type: 'guard'; reason: string };
 
 /**
  * Called when a page has been captured, and awaited before the walk moves on.
@@ -152,13 +156,76 @@ const VIEWPORT_HEIGHT = 900;
 export const MAX_PAGES = 5;
 
 /**
- * Reject anything that is not a public http target.
+ * Every address range Damian refuses to touch.
+ *
+ * Node's BlockList does the parsing, which is the point: it canonicalises
+ * longhand IPv6, and it checks IPv4-mapped IPv6 addresses against the IPv4
+ * rules, so ::ffff:127.0.0.1 cannot slip past as "not an IPv4 string". Do not
+ * add a ::ffff:0:0/96 rule for the mapped range: BlockList represents plain
+ * IPv4 as mapped IPv6 internally, so that rule matches every IPv4 address on
+ * the internet. Found by the test, kept as a warning.
+ */
+const FORBIDDEN = new BlockList();
+FORBIDDEN.addSubnet('0.0.0.0', 8, 'ipv4');
+FORBIDDEN.addSubnet('10.0.0.0', 8, 'ipv4');
+FORBIDDEN.addSubnet('100.64.0.0', 10, 'ipv4'); /* carrier NAT */
+FORBIDDEN.addSubnet('127.0.0.0', 8, 'ipv4');
+FORBIDDEN.addSubnet('169.254.0.0', 16, 'ipv4'); /* link local, incl. cloud metadata */
+FORBIDDEN.addSubnet('172.16.0.0', 12, 'ipv4');
+FORBIDDEN.addSubnet('192.168.0.0', 16, 'ipv4');
+FORBIDDEN.addSubnet('198.18.0.0', 15, 'ipv4'); /* benchmarking */
+FORBIDDEN.addSubnet('224.0.0.0', 3, 'ipv4'); /* multicast through broadcast */
+FORBIDDEN.addAddress('::', 'ipv6');
+FORBIDDEN.addAddress('::1', 'ipv6');
+FORBIDDEN.addSubnet('fc00::', 7, 'ipv6'); /* unique local */
+FORBIDDEN.addSubnet('fe80::', 10, 'ipv6'); /* link local */
+FORBIDDEN.addSubnet('ff00::', 8, 'ipv6'); /* multicast */
+FORBIDDEN.addSubnet('64:ff9b::', 96, 'ipv6'); /* NAT64 */
+
+/**
+ * True when a sign-in page's host may receive the target's credentials.
+ *
+ * The target itself, or a plain subdomain relationship in either direction:
+ * auth.example.com may take example.com's credentials, and www.example.com's
+ * credentials may go to example.com. Anything else — a hosted identity domain,
+ * a lookalike, a different site entirely — is refused, because typing a real
+ * password into a third party's form is credential exfiltration with Damian
+ * as the vector. Deliberately no public-suffix list: a shared-suffix cousin
+ * like evil.co.uk vs bank.co.uk fails this check too, since neither is a
+ * subdomain of the other. Conservative refusals are the acceptable failure.
+ */
+export function mayReceiveCredentials(host: string, target: string): boolean {
+  const a = host.toLowerCase().replace(/\.$/, '');
+  const b = target.toLowerCase().replace(/\.$/, '');
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/** True when this literal address is private, loopback, or otherwise off limits. */
+export function forbiddenAddress(ip: string): boolean {
+  const family = isIP(ip.replace(/%.*$/, ''));
+  if (family === 0) return true; /* not an address at all: refuse, do not guess */
+  try {
+    return FORBIDDEN.check(ip.replace(/%.*$/, ''), family === 6 ? 'ipv6' : 'ipv4');
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Reject anything that is not a public http target: resolve, then validate.
  *
  * This route fetches a URL supplied by the caller from inside the server, so
  * it is a request forgery primitive unless the private ranges are closed off.
- * Not a corner worth cutting.
+ * The old guard matched strings, which meant any public hostname with an A
+ * record pointing at 127.0.0.1 walked straight past it. Now the name is
+ * resolved and every address it resolves to is validated; one private answer
+ * refuses the lot. The same check runs again on every redirect hop, so a
+ * public entry page cannot bounce the browser somewhere the front door would
+ * have refused. DNS answers can still change between this check and Chrome's
+ * own lookup; that window is named here rather than pretended away.
  */
-export function assertPublicHttpUrl(raw: string): URL {
+export async function assertPublicHttpUrl(raw: string): Promise<URL> {
   const trimmed = raw.trim();
   /* A person types craigslist.org, not https://craigslist.org. */
   const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
@@ -174,22 +241,38 @@ export function assertPublicHttpUrl(raw: string): URL {
     throw new Error('Damian only opens http and https targets.');
   }
 
-  const host = parsed.hostname.toLowerCase();
-  const blocked =
+  /* Names that only ever mean "this machine" or "this network". */
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
     host === 'localhost' ||
-    host === '::1' ||
     host.endsWith('.localhost') ||
     host.endsWith('.internal') ||
-    host.endsWith('.local') ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^0\./.test(host);
-
-  if (blocked) {
+    host.endsWith('.local')
+  ) {
     throw new Error('Damian will not open private or loopback addresses.');
+  }
+
+  /* A literal address needs no resolving, only judging. */
+  if (isIP(host)) {
+    if (forbiddenAddress(host)) {
+      throw new Error('Damian will not open private or loopback addresses.');
+    }
+    return parsed;
+  }
+
+  let answers: { address: string }[];
+  try {
+    answers = await lookup(host, { all: true });
+  } catch {
+    throw new Error(`${host} does not resolve, so Damian cannot open it.`);
+  }
+  if (answers.length === 0) {
+    throw new Error(`${host} does not resolve, so Damian cannot open it.`);
+  }
+  if (answers.some((answer) => forbiddenAddress(answer.address))) {
+    throw new Error(
+      `${host} resolves to a private or loopback address, so Damian will not open it.`,
+    );
   }
 
   return parsed;
@@ -835,7 +918,9 @@ interface Session {
   /** Check the page at phone width, then put the viewport back. */
   measureMobile: () => Promise<{ px: number; culprit: string | null }>;
   /** Find a sign in, fill it, submit it, and say honestly whether it worked. */
-  signIn: (credentials: TestCredentials) => Promise<SignInResult>;
+  signIn: (credentials: TestCredentials, targetHost: string) => Promise<SignInResult>;
+  /** The guard's verdict on the last navigation, read once and cleared. */
+  refusedNavigation: () => string | null;
   close: () => Promise<void>;
 }
 
@@ -994,6 +1079,10 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
   let currentUrl = '';
   /* Where the cursor is, so the next move starts from where it stopped. */
   let cursor = { x: VIEWPORT_WIDTH / 2, y: VIEWPORT_HEIGHT / 2 };
+  /* The main frame's id, so a blocked iframe is not treated like a blocked walk. */
+  let mainFrame = '';
+  /* Set when the guard refuses a main-frame navigation, read by whoever asked for it. */
+  let refused: string | null = null;
 
   const close = async () => {
     try {
@@ -1074,6 +1163,75 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
         settled = true;
       }
 
+      /*
+       * The guard at the wire, in two stages, and both are load-bearing.
+       *
+       * Request stage vets a fresh document request before it is sent, so a
+       * click or a scripted navigation to a private address never opens a
+       * connection. Response stage reads each redirect's Location and vets the
+       * hop before Chrome follows it — this stage exists because a redirect
+       * does not pause again at Request stage, which was found by test: the
+       * hop sailed through and only failed because nothing was listening.
+       * A live internal service would have been reached.
+       *
+       * Answered on the bare socket, because a pending-promise timer per
+       * document request is waste.
+       */
+      if (data.method === 'Fetch.requestPaused') {
+        const { requestId, request, frameId, responseStatusCode, responseHeaders } =
+          data.params as {
+            requestId: string;
+            request: { url: string };
+            frameId?: string;
+            responseStatusCode?: number;
+            responseHeaders?: { name: string; value: string }[];
+          };
+        const atResponse = responseStatusCode !== undefined;
+        void (async () => {
+          /* At response stage the URL to judge is where the redirect points. */
+          let judging: string | null = null;
+          if (!atResponse) {
+            judging = request.url;
+          } else if (responseStatusCode >= 300 && responseStatusCode < 400) {
+            const location = responseHeaders?.find(
+              (header) => header.name.toLowerCase() === 'location',
+            )?.value;
+            if (location) {
+              try {
+                judging = new URL(location, request.url).href;
+              } catch {
+                judging = location; /* unparseable: judged, and it will refuse */
+              }
+            }
+          }
+
+          let allowed = true;
+          if (judging && /^https?:/i.test(judging)) {
+            try {
+              await assertPublicHttpUrl(judging);
+            } catch {
+              allowed = false;
+            }
+          }
+          if (process.env.DAMIAN_GUARD_DEBUG)
+            console.warn(
+              `guard: ${atResponse ? `response ${responseStatusCode}` : 'request'} ${allowed ? 'allow' : 'REFUSE'} judged=${(judging ?? '(none)').slice(0, 60)} frame=${frameId} main=${mainFrame}`,
+            );
+          if (!allowed && (!frameId || frameId === mainFrame)) refused = judging;
+          socket?.send(
+            JSON.stringify({
+              id: (messageId += 1),
+              method: allowed
+                ? atResponse
+                  ? 'Fetch.continueResponse'
+                  : 'Fetch.continueRequest'
+                : 'Fetch.failRequest',
+              params: allowed ? { requestId } : { requestId, errorReason: 'BlockedByClient' },
+            }),
+          );
+        })();
+      }
+
       if (data.method === 'Page.screencastFrame') {
         /*
          * Acked on the bare socket, never through send(). Each send registers
@@ -1094,6 +1252,17 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Page.setLifecycleEventsEnabled', { enabled: true });
+    /* Only documents pause at the guard. Subresources are Chrome's business. */
+    await send('Fetch.enable', {
+      patterns: [
+        { urlPattern: '*', resourceType: 'Document', requestStage: 'Request' },
+        { urlPattern: '*', resourceType: 'Document', requestStage: 'Response' },
+      ],
+    });
+    const tree = (await send('Page.getFrameTree')) as {
+      frameTree?: { frame?: { id?: string } };
+    };
+    mainFrame = tree.frameTree?.frame?.id ?? '';
     await send('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_PRELUDE });
     await send('Emulation.setDeviceMetricsOverride', {
       width: VIEWPORT_WIDTH,
@@ -1115,18 +1284,37 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
     /* Wait on whichever signal this page actually produces, then settle. */
     const rest = async (budget = 15000) => {
       const deadline = Date.now() + budget;
-      while (!loaded && !settled && Date.now() < deadline) {
+      /* A refusal is also an answer; there is nothing left to wait for. */
+      while (!loaded && !settled && !refused && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100));
       }
       /* A short settle for the paint that follows load. */
       await new Promise((r) => setTimeout(r, 700));
     };
 
+    /** The guard's verdict on the last navigation, read once and cleared. */
+    const refusedNavigation = () => {
+      const verdict = refused;
+      refused = null;
+      return verdict;
+    };
+
     const goto = async (url: string) => {
       loaded = false;
       settled = false;
+      refused = null;
       await send('Page.navigate', { url });
       await rest();
+      const blocked = refusedNavigation();
+      if (blocked) {
+        let where = blocked;
+        try {
+          where = new URL(blocked).hostname;
+        } catch {
+          /* name it as it came */
+        }
+        throw new Error(`Damian refused ${where}: it points at a private or loopback address.`);
+      }
       currentUrl = url;
     };
 
@@ -1369,7 +1557,10 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
      * Whether it worked is measured after the fact, not assumed: still a
      * password box on screen means it did not.
      */
-    const signIn = async (credentials: TestCredentials): Promise<SignInResult> => {
+    const signIn = async (
+      credentials: TestCredentials,
+      targetHost: string,
+    ): Promise<SignInResult> => {
       try {
         /*
          * Wait for the form, do not sleep and hope.
@@ -1410,6 +1601,32 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
               }
             : { ok: false, evidence: 'I could not find anywhere to sign in, so this is the public side only.' };
         }
+
+        /*
+         * The highest-severity check in the repo. A "Sign in" link that led
+         * off-site means the password field in front of us belongs to someone
+         * other than the target, and typing into it is credential
+         * exfiltration. Checked before anything is typed, and checked again
+         * before the password goes in, because an email-first flow can
+         * navigate between the two.
+         */
+        const doorHost = (url: string): string => {
+          try {
+            return new URL(url).hostname;
+          } catch {
+            return '';
+          }
+        };
+        const offSite = (url: string): SignInResult | null =>
+          mayReceiveCredentials(doorHost(url), targetHost)
+            ? null
+            : {
+                ok: false,
+                evidence: `The sign in lives on ${doorHost(url) || 'another site'}, not ${targetHost}, and credentials do not leave the site they belong to. Walking the public side instead.`,
+              };
+
+        const away = offSite(door.url);
+        if (away) return away;
 
         const before = door.url;
 
@@ -1470,6 +1687,10 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
           }
         }
 
+        /* The flow may have navigated since the first check. Check again. */
+        const drifted = offSite(door.url);
+        if (drifted) return drifted;
+
         await fill('data-damian-pass', credentials.password);
         await submit(door.submit);
 
@@ -1495,7 +1716,7 @@ async function openSession(onFrame?: (frame: string) => void): Promise<Session> 
       }
     };
 
-    return { send, evaluate, goto, clickLink, scrollThrough, measureMobile, signIn, close };
+    return { send, evaluate, goto, clickLink, scrollThrough, measureMobile, signIn, refusedNavigation, close };
   } catch (error) {
     await close();
     throw error;
@@ -1529,7 +1750,7 @@ export async function* crawl(
   hooks: CrawlHooks,
   credentials?: TestCredentials | null,
 ): AsyncGenerator<CrawlEvent> {
-  const entry = assertPublicHttpUrl(rawUrl);
+  const entry = await assertPublicHttpUrl(rawUrl);
 
   /*
    * Producer and consumer, deliberately.
@@ -1626,7 +1847,7 @@ export async function* crawl(
        * in is said out loud rather than quietly walked past.
        */
       if (credentials) {
-        const result = await session.signIn(credentials);
+        const result = await session.signIn(credentials, entry.hostname);
         push({ type: 'auth', ...result });
         /*
          * A sign in that did not work leaves us standing on the login screen,
@@ -1665,6 +1886,21 @@ export async function* crawl(
           const clicked = await session.clickLink(link.url);
           push({ type: 'move', label: link.label, clicked });
           if (!clicked) await session.goto(link.url);
+
+          /*
+           * A click can navigate somewhere the guard refuses — a same-origin
+           * link is allowed to redirect anywhere it likes. The refusal is
+           * named to the viewer and the page is skipped, not captured, because
+           * whatever is on screen now is not the page the link promised.
+           */
+          const blocked = session.refusedNavigation();
+          if (blocked) {
+            push({
+              type: 'guard',
+              reason: `${link.label} redirected toward a private address, so Damian refused it and moved on.`,
+            });
+            continue;
+          }
 
           await session.scrollThrough();
           await hooks.onPage(await capturePage(link.url, link.label), visited);

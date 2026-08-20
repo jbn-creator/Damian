@@ -251,6 +251,13 @@ export async function POST(request: Request) {
             narrate(async () => emit({ type: 'auth', ok, evidence }));
             continue;
           }
+
+          /* The guard refused something. The viewer hears why, in order. */
+          if (event.type === 'guard') {
+            const { reason } = event;
+            narrate(async () => emit({ type: 'aside', says: reason }));
+            continue;
+          }
         }
 
         await narration;

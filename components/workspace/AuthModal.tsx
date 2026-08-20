@@ -214,14 +214,22 @@ export function AuthModal({
                   </div>
                 </div>
 
+                {/*
+                  Consent, before the typing. Screenshots of signed-in pages
+                  leave the machine for judgement, and the person owning these
+                  credentials must know that before the password goes in, not
+                  after. The previous copy said nothing is sent anywhere, which
+                  stopped being true the day judgement shipped.
+                */}
                 <p className="mt-1 flex items-start gap-2 text-tiny leading-5 text-silver">
                   <ShieldCheck
                     aria-hidden="true"
                     className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald"
                     strokeWidth={2}
                   />
-                  Credentials stay in this browser session. Nothing is sent
-                  anywhere and nothing is written to disk.
+                  Credentials are typed into this site only, held for one run,
+                  never stored. Screenshots of signed-in pages are sent to
+                  Z.ai, the model provider, to be judged.
                 </p>
 
                 <div className="mt-4 flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">
